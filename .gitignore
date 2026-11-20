@@ -1,0 +1,9 @@
+build/
+out/
+dist/
+*.obj
+*.pdb
+*.ilk
+.vs/
+node_modules/
+*.user
