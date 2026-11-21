@@ -241,8 +241,7 @@ void ApplyHotkeys() {
 void UpdateTrayTip() {
     NOTIFYICONDATAW nid{ sizeof(nid) };
     nid.hWnd = g_hwnd; nid.uID = 1; nid.uFlags = NIF_TIP | NIF_SHOWTIP;
-    std::wstring tip = L"Ionization
-Motion blur ";
+    std::wstring tip = L"Ionization\nMotion blur ";
     tip += g_settings.boolean("blur.enabled", true) ? L"on" : L"off";
     tip += L", color ";
     tip += g_settings.boolean("visuals.enabled", true) ? L"on" : L"off";
