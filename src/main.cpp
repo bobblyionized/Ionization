@@ -11,6 +11,7 @@
 #include "memory.h"
 #include "macro.h"
 #include "dock.h"
+#include "island.h"
 #include <shellapi.h>
 #include <shobjidl.h>
 #include <shlwapi.h>
@@ -27,7 +28,8 @@ const wchar_t* kPanelClass = strstr(IONIZATION_VERSION, "dev") ? L"IonizationPan
 const wchar_t* kHost = L"https://ionization.local/";
 enum { TIMER_STATS = 1, TIMER_SAVE, TIMER_UPDATE, TIMER_ZORDER, TIMER_DUMP, TIMER_EXIT, TIMER_SHOW,
        TIMER_GAME, TIMER_RAISECHECK, TIMER_UNLOAD, TIMER_MEM, TIMER_MACRO, TIMER_RECTEST };
-enum { HK_BLUR = 1, HK_VISUALS, HK_CLOCK };
+enum { HK_BLUR = 1, HK_VISUALS, HK_CLOCK, HK_MIC, HK_CARD, HK_PICK };
+const ULONG_PTR kCopyIsland = 0x49534C44;   // WM_COPYDATA tag for `Ionization.exe --island "text"`
 enum { IDM_SHOW = 100, IDM_BLUR, IDM_VISUALS, IDM_CLOCK, IDM_ADDGAME, IDM_QUIT };
 #define WM_APP_SHOW (WM_APP + 10)
 
@@ -41,7 +43,7 @@ ComPtr<ICoreWebView2Environment> g_env;
 ComPtr<ICoreWebView2Controller> g_ctl;
 ComPtr<ICoreWebView2> g_wv;
 bool g_startHidden = false, g_navigated = false, g_quitting = false;
-bool g_hotkeysOk[4] = {};
+bool g_hotkeysOk[8] = {};
 Json g_lastUpdate;
 std::wstring g_dumpPath;
 UINT g_taskbarCreated = 0;
@@ -53,6 +55,9 @@ MemoryOptimizer g_mem;
 MacroEngine g_macros;
 Dock g_dock;
 std::string g_dockApplied;
+Island g_island;
+std::string g_islandApplied;
+bool g_islandHotkeys = false;
 ULONGLONG g_lastTrim = 0;
 bool g_revealPending = false, g_raiseCheckPending = false;
 HWINEVENTHOOK g_hookFg = nullptr, g_hookReorder = nullptr;
@@ -75,6 +80,7 @@ Json DefaultSettings() {
       "app": {"autoUpdate": true, "keepPanelSharp": false, "hotkeys": true, "trayHintShown": false},
       "dock": {"enabled": false, "mode": "hover", "size": 48, "magnify": 60, "hideTaskbar": true, "showClock": true,
                "pins": [], "imported": false, "tbHidden": false, "tbOrig": 0},
+      "island": {"enabled": false, "shape": "island", "theme": "black", "size": 100, "hidden": false, "volumeOsd": true},
       "memory": {"lowPriority": false, "autoTrim": false, "autoTrimAt": 85, "gameBoost": true},
       "perf": {"gameMode": true, "quality": "full", "hideClockInGames": true,
                "games": [{"exe": "robloxplayerbeta.exe", "mode": "pause"}, {"exe": "hd-player.exe", "mode": "pause"},
@@ -231,6 +237,9 @@ Json HotkeysJson() {
     h["blur"] = g_hotkeysOk[HK_BLUR];
     h["visuals"] = g_hotkeysOk[HK_VISUALS];
     h["clock"] = g_hotkeysOk[HK_CLOCK];
+    h["mic"] = g_hotkeysOk[HK_MIC];
+    h["card"] = g_hotkeysOk[HK_CARD];
+    h["pick"] = g_hotkeysOk[HK_PICK];
     return h;
 }
 
@@ -378,6 +387,42 @@ void ApplyDock() {
     g_dock.Apply(DockFrom(g_settings), g_game.Status().inGame);
 }
 
+IslandSettings IslandFrom(const Json& s) {
+    IslandSettings i;
+    i.enabled = s.boolean("island.enabled", false);
+    i.shape = s.str("island.shape", "island");
+    i.theme = s.str("island.theme", "black");
+    i.size = (float)s.num("island.size", 100);
+    i.hidden = s.boolean("island.hidden", false);
+    i.volumeOsd = s.boolean("island.volumeOsd", true);
+    i.monitor = (int)s.num("display.monitor", 0);
+    return i;
+}
+
+// Island shortcuts exist only while the island is on (Ctrl+Alt+M / N / P).
+void ApplyIslandHotkeys() {
+    bool want = g_settings.boolean("island.enabled", false) && g_settings.boolean("app.hotkeys", true);
+    if (want == g_islandHotkeys) return;
+    g_islandHotkeys = want;
+    for (int id : { HK_MIC, HK_CARD, HK_PICK }) { UnregisterHotKey(g_hwnd, id); g_hotkeysOk[id] = false; }
+    if (!want) return;
+    g_hotkeysOk[HK_MIC] = RegisterHotKey(g_hwnd, HK_MIC, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'M') != 0;
+    g_hotkeysOk[HK_CARD] = RegisterHotKey(g_hwnd, HK_CARD, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'N') != 0;
+    g_hotkeysOk[HK_PICK] = RegisterHotKey(g_hwnd, HK_PICK, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'P') != 0;
+}
+
+void ApplyIsland() {
+    Json key = Json::object();
+    if (const Json* d = g_settings.find("island")) key["i"] = *d;
+    key["g"] = g_game.Status().inGame;
+    key["m"] = g_settings.num("display.monitor", 0);
+    std::string k = key.dump();
+    ApplyIslandHotkeys();
+    if (k == g_islandApplied) return;
+    g_islandApplied = k;
+    g_island.Apply(IslandFrom(g_settings), g_game.Status().inGame);
+}
+
 void ApplyMemory() {
     g_mem.SetLowPriority(g_settings.boolean("memory.lowPriority", false), ForegroundPid());
 }
@@ -406,6 +451,7 @@ void ApplySettings() {
     }
     ApplyPanelSharp();
     ApplyDock();
+    ApplyIsland();
     UpdateTrayTip();
 }
 
@@ -536,6 +582,7 @@ void Quit() {
     g_mem.RestoreAll();
     g_macros.StopAll();
     g_dock.Apply(DockSettings{}, false);   // destroys the dock and gives the taskbar back
+    g_island.Apply(IslandSettings{}, false);
     g_settings["dock"]["tbHidden"] = false;
     SaveSettingsNow();
     if (g_hookFg) UnhookWinEvent(g_hookFg);
@@ -944,7 +991,27 @@ LRESULT CALLBACK PanelProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         if (w == HK_BLUR) ToggleSetting("blur", "enabled");
         else if (w == HK_VISUALS) ToggleSetting("visuals", "enabled");
         else if (w == HK_CLOCK) ToggleSetting("clock", "enabled");
+        else if (w == HK_MIC) g_island.ToggleMic();
+        else if (w == HK_CARD) g_island.ToggleCard();
+        else if (w == HK_PICK) g_island.PickColor();
         return 0;
+    case WM_COPYDATA: {
+        auto* cd = (COPYDATASTRUCT*)l;
+        if (!cd || cd->dwData != kCopyIsland || !cd->lpData || cd->cbData > 8192) return FALSE;
+        std::wstring text((const wchar_t*)cd->lpData, cd->cbData / sizeof(wchar_t));
+        while (!text.empty() && text.back() == 0) text.pop_back();
+        if (text.empty()) return TRUE;
+        if (g_island.Hwnd()) g_island.ShowMessage(text, 0, 6000);
+        else {
+            // Island is off: fall back to a regular Windows notification from the tray icon.
+            NOTIFYICONDATAW nid{ sizeof(nid) };
+            nid.hWnd = g_hwnd; nid.uID = 1; nid.uFlags = NIF_INFO;
+            wcsncpy_s(nid.szInfoTitle, L"Ionization", _TRUNCATE);
+            wcsncpy_s(nid.szInfo, text.c_str(), _TRUNCATE);
+            Shell_NotifyIconW(NIM_MODIFY, &nid);
+        }
+        return TRUE;
+    }
     case WM_APP_TRAY:
         switch (LOWORD(l)) {
         case WM_LBUTTONUP: case NIN_SELECT: case NIN_KEYSELECT: ShowPanel(); break;
@@ -968,9 +1035,11 @@ LRESULT CALLBACK PanelProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         if (w == 3) {
             // Overlay just re-raised itself: lift the clock and (optionally) the panel above it.
             g_clock.Reassert();
+            g_island.Reassert();
             if (g_panelTopmost) SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         } else if (w == 1) {
             g_clock.Reassert();
+            g_island.Reassert();
             ApplyPanelSharp();
         }
         return 0;
@@ -1033,7 +1102,7 @@ LRESULT CALLBACK PanelProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             if (!IsWindowVisible(h) && g_ctl) DestroyWebView();
             break;
         case TIMER_ZORDER:
-            if (!g_renderer.IsRunning()) g_clock.Reassert();
+            if (!g_renderer.IsRunning()) { g_clock.Reassert(); g_island.Reassert(); }
             break;
         case TIMER_UPDATE:
             if (g_settings.boolean("app.autoUpdate", true)) Updater::CheckAsync(h, true);
@@ -1082,9 +1151,20 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     }
 
     HANDLE mutex = CreateMutexW(nullptr, TRUE, Updater::IsDevBuild() ? L"Local\\IonizationSingleInstanceDev" : L"Local\\IonizationSingleInstance");
+    // Everything after --island is the message, so it works quoted or not.
+    std::wstring islandText;
+    for (int i = 1; i < argc; ++i) if (!wcscmp(argv[i], L"--island")) {
+        for (int j = i + 1; j < argc; ++j) { if (!islandText.empty()) islandText += L' '; islandText += argv[j]; }
+        break;
+    }
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         HWND other = FindWindowW(kPanelClass, nullptr);
-        if (other) PostMessageW(other, WM_APP_SHOW, 0, 0);
+        if (other && !islandText.empty()) {
+            // `Ionization.exe --island "Build finished"`: put a line on the running island.
+            COPYDATASTRUCT cd{ kCopyIsland, (DWORD)((islandText.size() + 1) * sizeof(wchar_t)), (void*)islandText.c_str() };
+            DWORD_PTR res = 0;
+            SendMessageTimeoutW(other, WM_COPYDATA, 0, (LPARAM)&cd, SMTO_ABORTIFHUNG, 3000, &res);
+        } else if (other) PostMessageW(other, WM_APP_SHOW, 0, 0);
         return 0;
     }
 
@@ -1118,6 +1198,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     g_startHidden = HasArg(argc, argv, L"--tray");
     g_renderer.feedbackTest = HasArg(argc, argv, L"--no-exclude");
     g_clock.noExclude = g_renderer.feedbackTest;
+    g_island.noExclude = g_renderer.feedbackTest;
+    if (!islandText.empty()) g_startHidden = true;   // first launch via --island: stay in the tray
     g_dumpPath = ArgValue(argc, argv, L"--dump-frame");
     std::wstring exitAfter = ArgValue(argc, argv, L"--exit-after");
 
@@ -1192,6 +1274,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     g_game.Tick();
     g_gpuLoad.Open(GetCurrentProcessId());
     ApplySettings();
+    if (!islandText.empty()) {
+        COPYDATASTRUCT cd{ kCopyIsland, (DWORD)((islandText.size() + 1) * sizeof(wchar_t)), (void*)islandText.c_str() };
+        SendMessageW(g_hwnd, WM_COPYDATA, 0, (LPARAM)&cd);
+    }
+    if (std::wstring demo = ArgValue(argc, argv, L"--island-card"); !demo.empty()) g_island.OpenCard(_wtoi(demo.c_str()));   // screenshot tests
     // Started in the tray (e.g. at sign-in): don't load the browser engine until the panel opens.
     if (!g_startHidden) ShowPanel();
 

@@ -18,6 +18,7 @@ const DEFAULTS = {
   app: { autoUpdate: true, keepPanelSharp: false, hotkeys: true, trayHintShown: false },
   perf: { gameMode: true, quality: "full", hideClockInGames: true, games: [] },
   memory: { lowPriority: false, autoTrim: false, autoTrimAt: 85, gameBoost: true },
+  island: { enabled: false, shape: "island", theme: "black", size: 100, hidden: false, volumeOsd: true },
   dock: { enabled: false, mode: "hover", size: 48, magnify: 60, hideTaskbar: true, showClock: true, pins: [], imported: false },
   profiles: [],
   activeProfile: "Clean",
@@ -681,6 +682,27 @@ function addGame(exe) {
   toast(`${gameName(exe)} added to Game Mode`, "ok");
 }
 
+// ------------------------------------------------------------------ island
+let islandDemo = "music";
+function renderIsland() {
+  const I = state.settings.island;
+  const pill = $("#islandPill");
+  if (!I || !pill) return;
+  setSeg($("#islandShapeSeg"), "v", I.shape);
+  setSeg($("#islandThemeSeg"), "v", I.theme);
+  setSeg($("#islandDemoSeg"), "v", islandDemo);
+  $("[data-pip=island]").classList.toggle("on", !!I.enabled);
+  pill.className = "isl " + (I.shape === "notch" ? "notch " : "") + (I.theme || "black");
+  pill.dataset.state = islandDemo;
+  pill.style.setProperty("--k", (clamp(I.size, 70, 140) / 100).toFixed(2));
+  const keys = [["Mute or unmute the mic", "M", "mic"], ["Open the island card", "N", "card"], ["Pick a color from the screen", "P", "pick"]];
+  const hk = state.settings.app.hotkeys;
+  $("#islandKeys").innerHTML = keys.map(([name, key, id]) => {
+    const tag = !hk ? `<span class="tag dim">disabled</span>` : !I.enabled ? `<span class="tag dim">island off</span>` : state.hotkeys[id] ? `<span class="tag">ready</span>` : `<span class="tag warn">in use</span>`;
+    return `<li><div><p class="t" style="margin:0">${name}</p></div><div class="r"><span style="display:flex;gap:3px"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>${key}</kbd></span>${tag}</div></li>`;
+  }).join("");
+}
+
 // ------------------------------------------------------------------ dock
 function renderDock() {
   const D = state.settings.dock;
@@ -798,6 +820,7 @@ function refreshFor(section) {
   if (section === "app") renderShortcuts();
   if (section === "perf") renderPerf();
   if (section === "dock") renderDock();
+  if (section === "island") renderIsland();
 }
 function renderAll() {
   syncBinds();
@@ -812,6 +835,7 @@ function renderAll() {
   renderUpdate();
   renderPerf();
   renderDock();
+  renderIsland();
   renderVisualsGate();
   schedulePreviews();
   $$(".seg").forEach(placeIndicator);
@@ -861,6 +885,7 @@ function build() {
     { path: "dock.size", label: "Icon size", min: 32, max: 80, step: 1, unit: "px", def: 48 },
     { path: "dock.magnify", label: "Magnification", min: 0, max: 100, step: 1, unit: "%", def: 60, hint: "on hover" },
   ]);
+  rows("#islandRows", [{ path: "island.size", label: "Size", min: 70, max: 140, step: 1, unit: "%", def: 100 }]);
   rows("#clockRows", [
     { path: "clock.size", label: "Size", min: 50, max: 200, step: 1, unit: "%", def: 100 },
     { path: "clock.opacity", label: "Opacity", min: 10, max: 100, step: 1, unit: "%", def: 100 },
@@ -872,6 +897,9 @@ function build() {
   $("#cmdBlur").addEventListener("click", () => set("blur.enabled", !get("blur.enabled")));
   $$("#qualitySeg button").forEach((b) => b.addEventListener("click", () => set("perf.quality", b.dataset.v)));
   $$("#dockModeSeg button").forEach((b) => b.addEventListener("click", () => set("dock.mode", b.dataset.v)));
+  $$("#islandShapeSeg button").forEach((b) => b.addEventListener("click", () => set("island.shape", b.dataset.v)));
+  $$("#islandThemeSeg button").forEach((b) => b.addEventListener("click", () => set("island.theme", b.dataset.v)));
+  $$("#islandDemoSeg button").forEach((b) => b.addEventListener("click", () => { islandDemo = b.dataset.v; renderIsland(); }));
   $("#addGameForm").addEventListener("submit", (e) => { e.preventDefault(); addGame($("#addGameExe").value); $("#addGameExe").value = ""; });
   $("#addLastGame").addEventListener("click", () => addGame(state.game.lastExe));
   $("#memTrimBtn").addEventListener("click", () => { $("#memTrimBtn").disabled = true; send("memTrim"); setTimeout(() => ($("#memTrimBtn").disabled = false), 1500); });

@@ -11,6 +11,11 @@ A visual changer for Windows 11, built around screen-wide, CapCut-style motion b
 - **LUTs**: nine built-in looks, plus any `.cube` file you import.
 - **Effects**: vignette, film grain, bloom, sharpen, chromatic aberration and night warmth.
 - **Desktop clock** in three styles (Volt, Mono, Minimal). It can sit on top or on the desktop, and you can drag it anywhere.
+- **Island**: a live pill at the top of the screen. It shows now playing (any app that uses Windows media controls) and mic and camera in-use dots. Hover it for a card with play/pause/skip, volume and brightness sliders, mic mute, a color picker, snip and a focus timer. It comes in Island or Notch shape, with Black, Graphite or Glass themes.
+  - `Ctrl+Alt+M` mutes the mic, `Ctrl+Alt+N` opens the card and `Ctrl+Alt+P` picks a color.
+  - Scripts can post a line with `Ionization.exe --island "Build finished"`.
+- **Dock**: a floating, magnifying dock that replaces the Windows taskbar and gives it back when turned off.
+- **Memory** and **Macros**: background RAM trimming, plus a keyboard and mouse macro recorder and player.
 - **Profiles**: Clean, Cinematic, Dreamy, Retro, Night, and your own saved looks.
 - **Hotkeys**: `Ctrl+Alt+B` toggles blur, `Ctrl+Alt+V` toggles color and effects, `Ctrl+Alt+C` toggles the clock. A tray icon is always there too.
 

@@ -28,6 +28,7 @@
     <symbol id="i-play" viewBox="0 0 16 16" fill="currentColor"><path d="M5 3.4v9.2a.6.6 0 0 0 .9.5l7.3-4.6a.6.6 0 0 0 0-1L5.9 2.9a.6.6 0 0 0-.9.5Z"/></symbol>
     <symbol id="i-stop" viewBox="0 0 16 16" fill="currentColor"><rect x="4" y="4" width="8" height="8" rx="1.6"/></symbol>
     <symbol id="i-rec" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="4.6"/></symbol>
+    <symbol id="i-island" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1.6 1.9h12.8"/><rect x="3" y="4.4" width="10" height="4.4" rx="2.2"/><circle cx="10.6" cy="6.6" r=".55" fill="currentColor" stroke="none"/><path d="M5 12.2h6" opacity=".55"/></symbol>
     <symbol id="i-dock" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1.8" y="9.6" width="12.4" height="4.4" rx="1.6"/><rect x="3.8" y="5.4" width="3" height="3" rx=".8"/><rect x="7.6" y="3" width="4.4" height="4.4" rx="1.1"/></symbol>
     <symbol id="i-about" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="6.1"/><path d="M8 7.2v3.9"/><circle cx="8" cy="4.9" r=".5" fill="currentColor"/></symbol>
     <symbol id="i-min" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M4 8.5h8"/></symbol>
@@ -77,6 +78,7 @@
         <li><button data-view="luts"><svg class="ico" width="16" height="16"><use href="#i-lut"/></svg>LUTs</button></li>
         <li><button data-view="fx"><svg class="ico" width="16" height="16"><use href="#i-fx"/></svg>Effects</button></li>
         <li class="group">Desktop</li>
+        <li><button data-view="island"><svg class="ico" width="16" height="16"><use href="#i-island"/></svg>Island<i class="pip" data-pip="island"></i></button></li>
         <li><button data-view="dock"><svg class="ico" width="16" height="16"><use href="#i-dock"/></svg>Dock<i class="pip" data-pip="dock"></i></button></li>
         <li><button data-view="clock"><svg class="ico" width="16" height="16"><use href="#i-clock"/></svg>Clock<i class="pip" data-pip="clock"></i></button></li>
         <li class="group">System</li>
@@ -225,6 +227,67 @@
             <div class="card"><div class="card-head"><p class="card-title" style="margin:0">Preview</p><span class="tag dim">approx.</span></div>
               <div class="preview" style="margin-top:12px"><canvas id="fxPreview" width="320" height="200"></canvas><span class="cap">Before</span><span class="cap after">After</span></div></div>
             <div class="card"><p class="card-title" style="margin:0">Film</p><div class="rows" id="filmRows"></div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================== ISLAND -->
+      <section class="view" data-view="island">
+        <div class="viewhead">
+          <div><p class="title" style="margin:0">Island</p><p class="subtitle" style="margin:2px 0 0">A live pill at the top of the screen for music, controls, timers and alerts</p></div>
+          <label class="switch"><input type="checkbox" data-bind="island.enabled"><span class="track"><span class="knob"></span></span><span class="lbl">Show the island</span></label>
+        </div>
+        <div class="grid">
+          <div class="card">
+            <div class="card-head" style="align-items:center"><p class="card-title" style="margin:0">Preview</p>
+              <div class="seg sm" id="islandDemoSeg"><button data-v="idle">Idle</button><button data-v="music">Music</button><button data-v="mic">Mic on</button><button data-v="timer">Timer</button><button data-v="card">Hover</button><i class="ind"></i></div></div>
+            <div class="islstage" id="islandStage">
+              <div class="isl" id="islandPill" data-state="idle">
+                <div class="isl-row isl-idle"><i class="isl-lens"></i></div>
+                <div class="isl-row isl-music"><i class="isl-art"></i><span class="isl-t">Midnight Drive</span><span class="isl-eq"><i></i><i></i><i></i><i></i></span></div>
+                <div class="isl-row isl-mic"><i class="isl-dot"></i><span class="isl-t">Mic on</span><span class="isl-m">4:12</span></div>
+                <div class="isl-row isl-timer"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="9" r="5"/><path d="M8 9V6.4M6.5 2.4h3"/></svg><span class="isl-t dim">Focus</span><span class="isl-m">24:31</span></div>
+                <div class="isl-card">
+                  <div class="isl-tabs"><span class="on">Now playing</span><span>Controls</span><span>Timer</span><b>21:04</b></div>
+                  <div class="isl-np"><i class="isl-art lg"></i>
+                    <div class="isl-meta"><p>Midnight Drive</p><p class="dim">Neon Coast</p><div class="isl-prog"><i style="width:38%"></i></div>
+                      <div class="isl-ctl">
+                        <span><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M11.5 3.5 5 8l6.5 4.5z"/><rect x="3.2" y="3.5" width="1.6" height="9" rx=".5"/></svg></span>
+                        <span class="pri"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="4" y="3.2" width="2.6" height="9.6" rx=".8"/><rect x="9.4" y="3.2" width="2.6" height="9.6" rx=".8"/></svg></span>
+                        <span><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.5 3.5 11 8l-6.5 4.5z"/><rect x="11.2" y="3.5" width="1.6" height="9" rx=".5"/></svg></span>
+                      </div></div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="split">
+            <div class="card">
+              <p class="card-title" style="margin:0 0 10px">Look</p>
+              <div class="opt-row"><div><div class="t">Shape</div><div class="s">Float just below the edge, or hang from it like a notch</div></div>
+                <div class="seg sm" id="islandShapeSeg"><button data-v="island">Island</button><button data-v="notch">Notch</button><i class="ind"></i></div></div>
+              <div class="opt-row"><div><div class="t">Theme</div><div class="s">Black blends into dark wallpapers and screen edges</div></div>
+                <div class="seg sm" id="islandThemeSeg"><button data-v="black">Black</button><button data-v="graphite">Graphite</button><button data-v="glass">Glass</button><i class="ind"></i></div></div>
+              <div class="rows" id="islandRows"></div>
+              <p class="card-title" style="margin:18px 0 10px">Behavior</p>
+              <div class="opt-row"><div><div class="t">Stay out of sight</div><div class="s">Hidden when nothing is going on; touch the top edge to open it</div></div>
+                <label class="switch"><input type="checkbox" data-bind="island.hidden"><span class="track"><span class="knob"></span></span></label></div>
+              <div class="opt-row"><div><div class="t">Volume readout</div><div class="s">Shows the level on the island when you change the volume</div></div>
+                <label class="switch"><input type="checkbox" data-bind="island.volumeOsd"><span class="track"><span class="knob"></span></span></label></div>
+            </div>
+            <div class="stack">
+              <div class="card"><p class="card-title" style="margin:0">What it shows</p>
+                <ul class="lim">
+                  <li>Now playing from Spotify, browsers and any app that uses Windows media controls, with play, pause and skip.</li>
+                  <li>An orange dot while an app is using the microphone, green for the camera.</li>
+                  <li>Volume and brightness sliders, a mic mute button, a color picker and a snip button.</li>
+                  <li>A focus timer that counts down on the island.</li>
+                  <li>It steps aside while a game is running.</li>
+                </ul></div>
+              <div class="card"><p class="card-title" style="margin:0 0 4px">Shortcuts</p>
+                <ul class="list" id="islandKeys"></ul>
+                <p class="note" style="margin:10px 0 0">Scripts and tools can post a line to the island:</p>
+                <code class="cli">Ionization.exe --island "Build finished"</code></div>
+            </div>
           </div>
         </div>
       </section>
