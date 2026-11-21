@@ -41,7 +41,7 @@ You need Visual Studio 2022 Build Tools (C++ and the Windows SDK) and CMake.
 build.cmd
 ```
 
-This produces `dist\Ionization.exe`. Local builds are stamped `0.0.0-dev` and never auto-update.
+This produces `out\Ionization-dev.exe`. Local builds are stamped `0.0.0-dev` and never auto-update.
 
 Every push to `main` runs `.github/workflows/release.yml`. That workflow builds `v1.0.<run>` and publishes it as the latest release, and installed copies pick it up within six hours (or right away with **Check now**).
 
