@@ -20,6 +20,7 @@ const DEFAULTS = {
   memory: { lowPriority: false, autoTrim: false, autoTrimAt: 85, gameBoost: true },
   island: { enabled: false, shape: "island", theme: "black", size: 100, hidden: false, volumeOsd: true },
   clipboard: { enabled: false, max: 60 },
+  wallpaper: { enabled: false, source: "shader", shader: "aurora", speed: 100, dim: 0, fps: 30, image: "", video: "", pan: true, displays: "all", pauseBattery: true },
   widgets: { layer: "desktop", theme: "glass", units: "c", hour24: true, size: 100,
     weather: { on: false, x: -1, y: -1, place: "", lat: 0, lon: 0 },
     clocks: { on: false, x: -1, y: -1, zones: [{ name: "London", tz: "Europe/London" }, { name: "New York", tz: "America/New_York" }, { name: "Tokyo", tz: "Asia/Tokyo" }] },
@@ -95,7 +96,7 @@ function onHost(msg) {
       if ("clockEditing" in msg) state.clockEditing = !!msg.clockEditing;
       renderAll();
       break;
-    case "stats": state.stats = msg; renderStats(); break;
+    case "stats": state.stats = msg; renderStats(); renderWallpaperStatus(); break;
     case "luts": state.luts = msg.luts || []; renderLuts(); break;
     case "monitors": state.monitors = msg.monitors || []; renderMonitors(); renderHeader(); break;
     case "update": state.update = msg.value; renderUpdate(); break;
@@ -842,6 +843,47 @@ function renderWidgets() {
   $$("[data-tdel]").forEach((b) => b.addEventListener("click", () => { todos.splice(Number(b.dataset.tdel), 1); pushSettings(); renderWidgets(); }));
 }
 
+
+// ------------------------------------------------------------------ wallpaper
+const WP_LOOKS = [
+  { id: "aurora", name: "Aurora", desc: "Northern lights" },
+  { id: "flow", name: "Flow", desc: "Slow ink marbling" },
+  { id: "grid", name: "Grid Pulse", desc: "Synth horizon" },
+  { id: "ink", name: "Ink", desc: "Drifting drops" },
+  { id: "mesh", name: "Mesh", desc: "Soft color fields" },
+];
+function baseName(p) { return (p || "").split(/[\\/]/).pop(); }
+function renderWallpaperStatus() {
+  const el = $("#wpStatus");
+  if (!el) return;
+  const W = state.settings.wallpaper;
+  const st = !W.enabled ? "Off" : (state.stats.wallpaper || "Starting");
+  el.textContent = st.toUpperCase();
+  el.classList.toggle("live", st === "Live");
+  el.classList.toggle("dim", st !== "Live");
+}
+function renderWallpaper() {
+  const W = state.settings.wallpaper;
+  if (!W || !$("#wpGallery")) return;
+  $("[data-pip=wallpaper]").classList.toggle("on", !!W.enabled);
+  setSeg($("#wpSourceSeg"), "v", W.source);
+  setSeg($("#wpFpsSeg"), "v", String(W.fps));
+  setSeg($("#wpDisplaysSeg"), "v", W.displays === "all" ? "all" : "one");
+  $$(".wp-pane").forEach((p) => p.classList.toggle("on", p.dataset.pane === W.source));
+  $("#wpGallery").innerHTML = WP_LOOKS.map((l) => `<button class="wpt${W.shader === l.id ? " on" : ""}" data-look="${l.id}">
+    <span class="pv ${l.id}"><i></i><i></i></span><span><span class="nm" style="display:block">${l.name}</span><span class="ds" style="display:block">${l.desc}</span></span></button>`).join("");
+  $$("#wpGallery [data-look]").forEach((b) => b.addEventListener("click", () => {
+    W.shader = b.dataset.look; W.source = "shader";
+    if (!W.enabled) W.enabled = true;
+    pushSettings(); renderWallpaper(); syncBinds();
+  }));
+  $("#wpImageName").textContent = W.image ? baseName(W.image) : "No image chosen";
+  $("#wpImagePath").textContent = W.image || "JPG, PNG, WebP, BMP or HEIC. It fills the screen and is cropped to fit";
+  $("#wpVideoName").textContent = W.video ? baseName(W.video) : "No video chosen";
+  $("#wpVideoPath").textContent = W.video || "MP4 (H.264 or HEVC), MOV or WMV. Plays muted and loops, decoded on the GPU";
+  renderWallpaperStatus();
+}
+
 // ------------------------------------------------------------------ island
 let islandDemo = "music";
 function renderIsland() {
@@ -984,6 +1026,7 @@ function refreshFor(section) {
   if (section === "blur") renderQuality();
   if (section === "clipboard") renderClipboard();
   if (section === "widgets") renderWidgets();
+  if (section === "wallpaper") renderWallpaper();
 }
 function renderAll() {
   syncBinds();
@@ -1002,6 +1045,7 @@ function renderAll() {
   renderQuality();
   renderClipboard();
   renderWidgets();
+  renderWallpaper();
   renderVisualsGate();
   schedulePreviews();
   $$(".seg").forEach(placeIndicator);
@@ -1052,6 +1096,10 @@ function build() {
     { path: "dock.magnify", label: "Magnification", min: 0, max: 100, step: 1, unit: "%", def: 60, hint: "on hover" },
   ]);
   rows("#clipRows", [{ path: "clipboard.max", label: "Keep", min: 20, max: 200, step: 10, unit: "", def: 60, hint: "items" }]);
+  rows("#wpRows", [
+    { path: "wallpaper.speed", label: "Speed", min: 25, max: 300, step: 5, unit: "%", def: 100, hint: "animated looks" },
+    { path: "wallpaper.dim", label: "Dim", min: 0, max: 70, step: 1, unit: "%", def: 0, hint: "keeps icons readable" },
+  ]);
   rows("#widgetRows", [{ path: "widgets.size", label: "Size", min: 70, max: 140, step: 1, unit: "%", def: 100 }]);
   rows("#islandRows", [{ path: "island.size", label: "Size", min: 70, max: 140, step: 1, unit: "%", def: 100 }]);
   rows("#clockRows", [
@@ -1067,6 +1115,10 @@ function build() {
   $$("#fpsSeg button").forEach((b) => b.addEventListener("click", () => set("blur.fps", Number(b.dataset.v))));
   $$("#clipFilterSeg button").forEach((b) => b.addEventListener("click", () => { clipFilter = b.dataset.v; renderClipboard(); }));
   $("#clipClearBtn").addEventListener("click", () => send("clipClear"));
+  $$("#wpSourceSeg button").forEach((b) => b.addEventListener("click", () => set("wallpaper.source", b.dataset.v)));
+  $$("#wpFpsSeg button").forEach((b) => b.addEventListener("click", () => set("wallpaper.fps", Number(b.dataset.v))));
+  $$("#wpDisplaysSeg button").forEach((b) => b.addEventListener("click", () => set("wallpaper.displays", b.dataset.v)));
+  $$("[data-pick]").forEach((b) => b.addEventListener("click", () => send("wpPick", { kind: b.dataset.pick })));
   $$("#widgetLayerSeg button").forEach((b) => b.addEventListener("click", () => set("widgets.layer", b.dataset.v)));
   $$("#widgetThemeSeg button").forEach((b) => b.addEventListener("click", () => set("widgets.theme", b.dataset.v)));
   $$("#unitsSeg button").forEach((b) => b.addEventListener("click", () => set("widgets.units", b.dataset.v)));
@@ -1153,6 +1205,7 @@ function showView(v) {
     memPolling(v === "memory");
     if (v === "clipboard") send("clipList");
     if (v === "widgets") renderWidgets();
+    if (v === "wallpaper") renderWallpaper();
     schedulePreviews();
   });
 }
@@ -1342,6 +1395,10 @@ const Mock = {
       if (m.type === "clipDelete") this.clips = this.clips.filter((c) => c.id !== m.id);
       if (m.type === "clipClear") this.clips = this.clips.filter((c) => c.pinned);
       onHost({ type: "clipList", items: this.clips, enabled: state.settings.clipboard.enabled });
+    } else if (m.type === "wpPick") {
+      state.settings.wallpaper[m.kind] = m.kind === "video" ? "C:\\Users\\you\\Videos\\rain-window.mp4" : "C:\\Users\\you\\Pictures\\mountains.jpg";
+      state.settings.wallpaper.source = m.kind;
+      renderWallpaper();
     } else if (m.type === "clipCopy") {
       onHost({ type: "toast", text: "Copied to the clipboard", tone: "ok" });
     } else if (m.type === "geoSearch") {

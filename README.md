@@ -26,6 +26,10 @@ A visual changer for Windows 11, built around screen-wide, CapCut-style motion b
 - **Shelf**: drag files onto the island to park them, then drag them back out into any app.
 - **Widgets**: weather (Open-Meteo, no account needed), a world clock, a calendar, a to-do list and live CPU/GPU/RAM/network.
   - They sit on the desktop or on top, and you can drag each one anywhere.
+- **Live wallpaper** behind your desktop icons. Your Windows wallpaper setting is never changed.
+  - Sources: five animated looks (Aurora, Flow, Grid Pulse, Ink, Mesh), an image with an optional slow drift, or a muted looping video decoded on the GPU.
+  - It only draws while the desktop is visible. Games, maximized or fullscreen windows, the lock screen and battery saver pause it.
+  - Animated looks render at half resolution.
 - **Dock**: a floating, magnifying dock that replaces the Windows taskbar and gives it back when turned off.
 - **Memory** and **Macros**: background RAM trimming, plus a keyboard and mouse macro recorder and player.
 - **Profiles**: Clean, Cinematic, Dreamy, Retro, Night, and your own saved looks.

@@ -30,6 +30,8 @@
     <symbol id="i-rec" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="4.6"/></symbol>
     <symbol id="i-island" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1.6 1.9h12.8"/><rect x="3" y="4.4" width="10" height="4.4" rx="2.2"/><circle cx="10.6" cy="6.6" r=".55" fill="currentColor" stroke="none"/><path d="M5 12.2h6" opacity=".55"/></symbol>
     <symbol id="i-clip" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="10" height="11" rx="1.8"/><rect x="5.6" y="1.8" width="4.8" height="2.6" rx=".9"/><path d="M5.6 8h4.8M5.6 10.6h3"/></symbol>
+    <symbol id="i-wallpaper" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1.8" y="2.6" width="12.4" height="9.4" rx="1.6"/><path d="m3.6 10.2 3-3 2.2 2.2 1.4-1.4 2.2 2.2"/><circle cx="10.6" cy="5.4" r="1"/><path d="M5.6 14h4.8"/></symbol>
+    <symbol id="i-video" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1.8" y="3.4" width="9" height="9.2" rx="1.6"/><path d="m10.8 6.6 3.4-2v6.8l-3.4-2"/></symbol>
     <symbol id="i-widgets" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="5.2" height="5.2" rx="1.4"/><rect x="8.8" y="2" width="5.2" height="5.2" rx="1.4"/><rect x="2" y="8.8" width="5.2" height="5.2" rx="1.4"/><circle cx="11.4" cy="11.4" r="2.6"/></symbol>
     <symbol id="i-text" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 4.5h10M3 8h10M3 11.5h6"/></symbol>
     <symbol id="i-link" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 9a2.6 2.6 0 0 0 3.7 0l2.1-2.1a2.6 2.6 0 0 0-3.7-3.7l-.8.8"/><path d="M9 7a2.6 2.6 0 0 0-3.7 0L3.2 9.1a2.6 2.6 0 0 0 3.7 3.7l.8-.8"/></symbol>
@@ -88,6 +90,7 @@
         <li class="group">Desktop</li>
         <li><button data-view="island"><svg class="ico" width="16" height="16"><use href="#i-island"/></svg>Island<i class="pip" data-pip="island"></i></button></li>
         <li><button data-view="widgets"><svg class="ico" width="16" height="16"><use href="#i-widgets"/></svg>Widgets<i class="pip" data-pip="widgets"></i></button></li>
+        <li><button data-view="wallpaper"><svg class="ico" width="16" height="16"><use href="#i-wallpaper"/></svg>Wallpaper<i class="pip" data-pip="wallpaper"></i></button></li>
         <li><button data-view="dock"><svg class="ico" width="16" height="16"><use href="#i-dock"/></svg>Dock<i class="pip" data-pip="dock"></i></button></li>
         <li><button data-view="clock"><svg class="ico" width="16" height="16"><use href="#i-clock"/></svg>Clock<i class="pip" data-pip="clock"></i></button></li>
         <li class="group">System</li>
@@ -305,6 +308,60 @@
                 <p class="note" style="margin:10px 0 0">Scripts and tools can post a line to the island:</p>
                 <code class="cli">Ionization.exe --island "Build finished"</code></div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================== WALLPAPER -->
+      <section class="view" data-view="wallpaper">
+        <div class="viewhead">
+          <div><p class="title" style="margin:0">Wallpaper</p><p class="subtitle" style="margin:2px 0 0">A live wallpaper behind your desktop icons. Your Windows wallpaper stays as it is</p></div>
+          <label class="switch"><input type="checkbox" data-bind="wallpaper.enabled"><span class="track"><span class="knob"></span></span><span class="lbl">Live wallpaper</span></label>
+        </div>
+        <div class="grid">
+          <div class="card">
+            <div class="card-head" style="align-items:center">
+              <div class="seg" id="wpSourceSeg"><button data-v="shader">Animated</button><button data-v="image">Image</button><button data-v="video">Video</button><i class="ind"></i></div>
+              <span class="tag dim" id="wpStatus">OFF</span>
+            </div>
+            <div class="wp-pane" data-pane="shader">
+              <div class="wpgal" id="wpGallery"></div>
+            </div>
+            <div class="wp-pane" data-pane="image">
+              <div class="wp-file">
+                <div class="wp-file-ic"><svg width="22" height="22"><use href="#i-image"/></svg></div>
+                <div style="min-width:0;flex:1"><p class="t" style="margin:0" id="wpImageName">No image chosen</p><p class="s" style="margin:2px 0 0" id="wpImagePath">JPG, PNG, WebP, BMP or HEIC. It fills the screen and is cropped to fit</p></div>
+                <button class="btn" data-pick="image"><svg width="14" height="14"><use href="#i-plus"/></svg>Choose image</button>
+              </div>
+              <div class="opt-row" style="margin-top:6px"><div><div class="t">Slow drift</div><div class="s">A gentle zoom and pan, so a still photo feels alive. Off draws it once and costs nothing</div></div>
+                <label class="switch"><input type="checkbox" data-bind="wallpaper.pan"><span class="track"><span class="knob"></span></span></label></div>
+            </div>
+            <div class="wp-pane" data-pane="video">
+              <div class="wp-file">
+                <div class="wp-file-ic"><svg width="22" height="22"><use href="#i-video"/></svg></div>
+                <div style="min-width:0;flex:1"><p class="t" style="margin:0" id="wpVideoName">No video chosen</p><p class="s" style="margin:2px 0 0" id="wpVideoPath">MP4 (H.264 or HEVC), MOV or WMV. Plays muted and loops, decoded on the GPU</p></div>
+                <button class="btn" data-pick="video"><svg width="14" height="14"><use href="#i-plus"/></svg>Choose video</button>
+              </div>
+            </div>
+          </div>
+          <div class="split">
+            <div class="card">
+              <p class="card-title" style="margin:0 0 10px">Playback</p>
+              <div class="opt-row"><div><div class="t">Frame rate</div><div class="s">For animated looks, drifting images and video</div></div>
+                <div class="seg sm" id="wpFpsSeg"><button data-v="15">15</button><button data-v="30">30</button><button data-v="60">60</button><i class="ind"></i></div></div>
+              <div class="opt-row"><div><div class="t">Displays</div><div class="s">Every screen, or only the one chosen under Display</div></div>
+                <div class="seg sm" id="wpDisplaysSeg"><button data-v="all">All</button><button data-v="one">Main</button><i class="ind"></i></div></div>
+              <div class="opt-row"><div><div class="t">Pause on battery saver</div><div class="s">Stops drawing while Windows saves battery</div></div>
+                <label class="switch"><input type="checkbox" data-bind="wallpaper.pauseBattery"><span class="track"><span class="knob"></span></span></label></div>
+              <div class="rows" id="wpRows"></div>
+            </div>
+            <div class="card"><p class="card-title" style="margin:0">Light on your PC</p>
+              <ul class="lim">
+                <li>It only draws while you can see the desktop. A maximized or fullscreen window, a game, or the lock screen pauses it.</li>
+                <li>Animated looks render at half resolution and are scaled up smoothly.</li>
+                <li>A still image is drawn once, then nothing runs at all.</li>
+                <li>Turn it off and your normal Windows wallpaper is right there.</li>
+              </ul></div>
           </div>
         </div>
       </section>

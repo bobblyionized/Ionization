@@ -625,3 +625,51 @@ input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px va
 .wcard-foot .s { font-size: 11px; color: var(--fg-3); margin-top: 1px; }
 .georesults:empty { display: none; }
 .georesults { margin-top: 10px; }
+
+/* ---------------------------------------------------------------- wallpaper */
+.wp-pane { display: none; margin-top: 14px; }
+.wp-pane.on { display: block; }
+.wpgal { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 1180px) { .wpgal { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.wpt { display: grid; gap: 8px; padding: 0; text-align: left; border-radius: 12px; }
+.wpt .pv { position: relative; aspect-ratio: 16 / 10; border-radius: 10px; overflow: hidden; background: #07080a;
+  box-shadow: inset 0 0 0 1px var(--line); transition: box-shadow .2s var(--ease-out); }
+.wpt:hover .pv { box-shadow: inset 0 0 0 1px var(--line-2); }
+.wpt.on .pv { box-shadow: 0 0 0 2px var(--volt), 0 0 22px -8px var(--volt-glow); }
+.wpt .nm { font-size: 13px; color: var(--fg); font-weight: 500; }
+.wpt .ds { font-size: 11px; color: var(--fg-3); margin-top: 1px; }
+.pv i { position: absolute; display: block; pointer-events: none; }
+/* aurora */
+.pv.aurora { background: linear-gradient(180deg, #0b0d16 0%, #07080a 70%); }
+.pv.aurora i { left: -20%; right: -20%; height: 46%; top: 12%; border-radius: 50%; filter: blur(10px);
+  background: linear-gradient(90deg, transparent, #7ff0a0aa 25%, #d4f53caa 50%, #7b4df2aa 78%, transparent); animation: pvSway 9s ease-in-out infinite alternate; }
+.pv.aurora i + i { top: 22%; opacity: .55; animation-duration: 13s; animation-direction: alternate-reverse; }
+/* flow */
+.pv.flow { background: radial-gradient(120% 90% at 70% 20%, #3a2a8a 0%, #17143a 45%, #07080a 100%); }
+.pv.flow i { inset: -30%; background: conic-gradient(from 0deg at 40% 60%, #07080a, #2a1f6a, #5b3fc2, #17143a, #07080a); filter: blur(14px); opacity: .8; animation: pvSpin 24s linear infinite; }
+/* grid */
+.pv.grid { background: linear-gradient(180deg, #07080a 0%, #120d24 52%, #07080a 53%); }
+.pv.grid i { left: -40%; right: -40%; top: 53%; bottom: -60%; transform: perspective(60px) rotateX(55deg); transform-origin: top;
+  background-image: linear-gradient(#7b4df266 1px, transparent 1px), linear-gradient(90deg, #7b4df266 1px, transparent 1px);
+  background-size: 18px 18px; animation: pvGrid 2.4s linear infinite; }
+.pv.grid i + i { top: 50%; bottom: auto; height: 6%; transform: none; background: linear-gradient(90deg, transparent, #9a7bff, transparent); filter: blur(3px); animation: none; }
+/* ink */
+.pv.ink { background: #08090c; }
+.pv.ink i { width: 46%; aspect-ratio: 1; border-radius: 50%; left: 14%; top: 18%; background: radial-gradient(circle at 40% 40%, #2a2a5a, #141428 70%);
+  box-shadow: 0 0 0 1.5px #d4f53c55, 0 0 14px -2px #7b4df266; animation: pvFloat 11s ease-in-out infinite alternate; }
+.pv.ink i + i { width: 30%; left: 58%; top: 40%; animation-duration: 8s; animation-direction: alternate-reverse; }
+/* mesh */
+.pv.mesh { background: #0c0b14; }
+.pv.mesh i { inset: -25%; filter: blur(16px); animation: pvSpin 30s linear infinite;
+  background: radial-gradient(35% 40% at 25% 30%, #c9e24088, transparent), radial-gradient(40% 45% at 70% 25%, #e8803a88, transparent),
+              radial-gradient(45% 50% at 60% 75%, #5a2ab0aa, transparent), radial-gradient(40% 40% at 20% 80%, #1a1f6aaa, transparent); }
+@keyframes pvSway { from { transform: translateX(-8%) rotate(-3deg); } to { transform: translateX(8%) rotate(3deg); } }
+@keyframes pvSpin { to { transform: rotate(360deg); } }
+@keyframes pvGrid { to { background-position: 0 18px, 0 0; } }
+@keyframes pvFloat { from { transform: translate(-6%, -4%) scale(.96); } to { transform: translate(8%, 6%) scale(1.05); } }
+@media (prefers-reduced-motion: reduce) { .pv i { animation: none !important; } }
+.wp-file { display: flex; align-items: center; gap: 14px; padding: 14px; border-radius: 12px; background: var(--panel-2); box-shadow: inset 0 0 0 1px var(--line); }
+.wp-file .t { font-size: 13.5px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wp-file .s { font-size: 11.5px; color: var(--fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wp-file-ic { width: 44px; height: 44px; border-radius: 10px; display: grid; place-items: center; background: var(--well); color: var(--fg-3); box-shadow: inset 0 0 0 1px var(--line); flex: none; }
+#wpStatus.live { color: var(--volt); }

@@ -14,6 +14,7 @@
 #include "island.h"
 #include "clipboard.h"
 #include "widgets.h"
+#include "wallpaper.h"
 #include "net.h"
 #include <thread>
 #include <shellapi.h>
@@ -66,11 +67,14 @@ ClipboardHistory g_clip;
 bool g_clipWatch = false;          // the panel's Clipboard page is open
 Widgets g_widgets;
 std::string g_widgetsApplied;
+Wallpaper g_wallpaper;
+std::string g_wallpaperApplied;
 ULONGLONG g_lastTrim = 0;
 bool g_revealPending = false, g_raiseCheckPending = false;
 HWINEVENTHOOK g_hookFg = nullptr, g_hookReorder = nullptr;
 void CreateWebView();
 void GameTick();
+void ApplySettings();
 DWORD ForegroundPid();
 
 // ------------------------------------------------------------------ settings
@@ -90,6 +94,8 @@ Json DefaultSettings() {
                "pins": [], "imported": false, "tbHidden": false, "tbOrig": 0},
       "island": {"enabled": false, "shape": "island", "theme": "black", "size": 100, "hidden": false, "volumeOsd": true},
       "clipboard": {"enabled": false, "max": 60},
+      "wallpaper": {"enabled": false, "source": "shader", "shader": "aurora", "speed": 100, "dim": 0, "fps": 30,
+                    "image": "", "video": "", "pan": true, "displays": "all", "pauseBattery": true},
       "widgets": {"layer": "desktop", "theme": "glass", "units": "c", "hour24": true, "size": 100,
                   "weather": {"on": false, "x": -1, "y": -1, "place": "", "lat": 0, "lon": 0},
                   "clocks": {"on": false, "x": -1, "y": -1, "zones": [{"name": "London", "tz": "Europe/London"},
@@ -440,6 +446,53 @@ void ApplyClipboard() {
     g_clip.Enable(g_settings.boolean("clipboard.enabled", false), (int)g_settings.num("clipboard.max", 60));
 }
 
+WallpaperSettings WallpaperFrom(const Json& s) {
+    WallpaperSettings w;
+    w.enabled = s.boolean("wallpaper.enabled", false);
+    w.source = s.str("wallpaper.source", "shader");
+    w.shader = s.str("wallpaper.shader", "aurora");
+    w.speed = (float)s.num("wallpaper.speed", 100);
+    w.dim = (float)s.num("wallpaper.dim", 0);
+    w.fps = (int)s.num("wallpaper.fps", 30);
+    w.image = Widen(s.str("wallpaper.image", ""));
+    w.video = Widen(s.str("wallpaper.video", ""));
+    w.pan = s.boolean("wallpaper.pan", true);
+    w.allDisplays = s.str("wallpaper.displays", "all") == "all";
+    w.monitor = (int)s.num("display.monitor", 0);
+    w.pauseBattery = s.boolean("wallpaper.pauseBattery", true);
+    return w;
+}
+
+void ApplyWallpaper() {
+    Json key = Json::object();
+    if (const Json* w = g_settings.find("wallpaper")) key["w"] = *w;
+    key["g"] = g_game.Status().inGame;
+    key["m"] = g_settings.num("display.monitor", 0);
+    std::string k = key.dump();
+    if (k == g_wallpaperApplied) return;
+    g_wallpaperApplied = k;
+    g_wallpaper.Apply(WallpaperFrom(g_settings), g_game.Status().inGame);
+}
+
+void PickWallpaperFile(const std::string& kind) {
+    ComPtr<IFileOpenDialog> dlg;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return;
+    bool video = kind == "video";
+    COMDLG_FILTERSPEC vspec[] = { { L"Videos (*.mp4, *.mov, *.wmv, *.m4v)", L"*.mp4;*.mov;*.wmv;*.m4v" } };
+    COMDLG_FILTERSPEC ispec[] = { { L"Images (*.jpg, *.png, *.webp, *.bmp)", L"*.jpg;*.jpeg;*.png;*.webp;*.bmp;*.gif;*.tif;*.tiff;*.heic" } };
+    dlg->SetFileTypes(1, video ? vspec : ispec);
+    dlg->SetTitle(video ? L"Choose a video wallpaper" : L"Choose an image wallpaper");
+    if (FAILED(dlg->Show(g_hwnd))) return;
+    ComPtr<IShellItem> item;
+    if (FAILED(dlg->GetResult(&item))) return;
+    PWSTR path = nullptr;
+    if (FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) return;
+    g_settings["wallpaper"][video ? "video" : "image"] = Narrow(path);
+    g_settings["wallpaper"]["source"] = video ? "video" : "image";
+    CoTaskMemFree(path);
+    ApplySettings(); SaveSoon(); SendState();
+}
+
 void ApplyWidgets() {
     Json key = Json::object();
     if (const Json* w = g_settings.find("widgets")) key["w"] = *w;
@@ -496,6 +549,7 @@ void ApplySettings() {
     ApplyIsland();
     ApplyClipboard();
     ApplyWidgets();
+    ApplyWallpaper();
     UpdateTrayTip();
 }
 
@@ -629,6 +683,7 @@ void Quit() {
     g_dock.Apply(DockSettings{}, false);   // destroys the dock and gives the taskbar back
     g_island.Apply(IslandSettings{}, false);
     g_widgets.Apply(Json::object(), false);
+    g_wallpaper.Apply(WallpaperSettings{}, false);   // gives the desktop back to Explorer
     g_clip.Enable(false, 60);   // saves the history
     g_settings["dock"]["tbHidden"] = false;
     SaveSettingsNow();
@@ -783,6 +838,7 @@ void HandleMessage(const Json& m) {
     if (type == "clipDelete") { g_clip.Remove((uint64_t)m.num("id", 0)); return; }
     if (type == "clipClear") { g_clip.Clear(); Toast("Clipboard history cleared (pinned items kept)", "ok"); return; }
     if (type == "widgetsRefresh") { g_widgets.RefreshWeather(); return; }
+    if (type == "wpPick") { PickWallpaperFile(m.str("kind", "image")); return; }
     if (type == "widgetsResetPos") {
         for (const char* t : { "weather", "clocks", "calendar", "todo", "stats" }) { g_settings["widgets"][t]["x"] = -1; g_settings["widgets"][t]["y"] = -1; }
         ApplySettings(); SaveSoon(); SendState();
@@ -1041,7 +1097,7 @@ void OnUpdateStatus(std::string* text) {
 }
 
 LRESULT CALLBACK PanelProc(HWND h, UINT m, WPARAM w, LPARAM l) {
-    if (m == g_taskbarCreated && g_taskbarCreated) { AddTrayIcon(); g_dock.OnTaskbarCreated(); return 0; }
+    if (m == g_taskbarCreated && g_taskbarCreated) { AddTrayIcon(); g_dock.OnTaskbarCreated(); g_wallpaper.OnExplorerRestart(); return 0; }
     switch (m) {
     case WM_NCCALCSIZE:
         if (w) return 0; // client area = whole window (custom title bar in the UI)
@@ -1157,6 +1213,7 @@ LRESULT CALLBACK PanelProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             j["fps"] = (double)s.fps; j["captureFps"] = (double)s.captureFps; j["gpuMs"] = (double)s.gpuMs;
             j["skipped"] = (double)s.skippedFps; j["quality"] = s.quality;
             j["gpuLoad"] = g_gpuLoad.Sample();
+            j["wallpaper"] = g_wallpaper.Status();
             j["width"] = s.width; j["height"] = s.height; j["refresh"] = s.refresh;
             PostToUI(j);
             break;
@@ -1397,6 +1454,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
         SendMessageW(g_hwnd, WM_COPYDATA, 0, (LPARAM)&cd);
     }
     if (std::wstring demo = ArgValue(argc, argv, L"--island-card"); !demo.empty()) g_island.OpenCard(_wtoi(demo.c_str()));   // screenshot tests
+    if (std::wstring wd = ArgValue(argc, argv, L"--wallpaper-dump"); !wd.empty()) g_wallpaper.RequestDump(wd);           // shader check without showing anything
 
     // Started in the tray (e.g. at sign-in): don't load the browser engine until the panel opens.
     if (!g_startHidden) ShowPanel();

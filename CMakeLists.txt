@@ -55,6 +55,7 @@ add_executable(Ionization WIN32
   src/clipboard.cpp
   src/widgets.cpp
   src/net.cpp
+  src/wallpaper.cpp
   "${CMAKE_BINARY_DIR}/app.rc"
   "${UI_RC}"
 )
@@ -70,7 +71,7 @@ target_link_options(Ionization PRIVATE /MANIFEST:EMBED)
 target_link_libraries(Ionization PRIVATE
   "${CMAKE_SOURCE_DIR}/third_party/webview2/lib/WebView2LoaderStatic.lib"
   d3d11 dxgi d3dcompiler dcomp d2d1 dwrite windowscodecs winhttp bcrypt
-  shlwapi shell32 ole32 oleaut32 user32 gdi32 dwmapi shcore advapi32 version pdh psapi windowsapp wbemuuid crypt32 iphlpapi)
+  shlwapi shell32 ole32 oleaut32 user32 gdi32 dwmapi shcore advapi32 version pdh psapi windowsapp wbemuuid crypt32 iphlpapi mfplat mfuuid wtsapi32)
 
 # Measurement tool (not shipped): a fullscreen GPU load that behaves like a game.
 add_executable(fpsbench tools/fpsbench/main.cpp)
@@ -81,3 +82,8 @@ target_link_libraries(fpsbench PRIVATE d3d11 dxgi d3dcompiler user32)
 add_executable(inputprobe tools/inputprobe/main.cpp)
 target_compile_definitions(inputprobe PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
 target_link_libraries(inputprobe PRIVATE user32 gdi32)
+
+# Test tool (not shipped): writes a short H.264 MP4 for checking the video wallpaper.
+add_executable(mkvideo tools/mkvideo/main.cpp)
+target_compile_definitions(mkvideo PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(mkvideo PRIVATE mfplat mfreadwrite mfuuid ole32)
