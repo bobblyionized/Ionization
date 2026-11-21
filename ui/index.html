@@ -95,7 +95,8 @@
       <section class="view active" data-view="blur">
         <div class="viewhead">
           <div class="tabs" id="modeTabs">
-            <button data-mode="trail" class="active">Trail</button>
+            <button data-mode="smooth" class="active">Smooth</button>
+            <button data-mode="trail">Trail</button>
             <button data-mode="blend">Frame blend</button>
             <i class="bar"></i>
           </div>
@@ -131,6 +132,7 @@
               </div>
               <div class="hero-slider" id="heroSlider"></div>
               <div class="ticks"><span>0</span><span>25</span><span>50</span><span>75</span><span>100</span></div>
+              <div class="rows" id="opacityRows" style="margin-top:18px"></div>
               <div class="demo" id="demo"><canvas id="demoCanvas"></canvas><span class="demo-cap" id="demoCap">Live preview</span></div>
               <div class="card-head" style="margin-top:18px;align-items:center">
                 <p class="hint" style="margin:0">Frame weights, last <span id="chartSpan">300</span> ms</p>
@@ -294,7 +296,7 @@
             <div class="stack">
               <div class="card">
                 <p class="card-title" style="margin:0 0 10px">Rendering</p>
-                <div class="opt-row"><div><div class="t">Quality</div><div class="s">Efficient renders trails at half resolution; still pixels stay exact</div></div>
+                <div class="opt-row"><div><div class="t">Trail quality</div><div class="s">For Trail and Frame blend. Efficient renders trails at half resolution and can leave faint edges</div></div>
                   <div class="seg sm" id="qualitySeg"><button data-v="efficient">Efficient</button><button data-v="full">Full</button><i class="ind"></i></div></div>
                 <div class="opt-row"><div><div class="t">Hide clock in games</div><div class="s">Anything drawn over a game makes Windows composite it</div></div>
                   <label class="switch"><input type="checkbox" data-bind="perf.hideClockInGames"><span class="track"><span class="knob"></span></span></label></div>

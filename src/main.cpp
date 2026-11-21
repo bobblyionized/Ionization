@@ -61,7 +61,7 @@ DWORD ForegroundPid();
 
 Json DefaultSettings() {
     return Json::parse(R"({
-      "blur": {"enabled": true, "mode": "trail", "strength": 45},
+      "blur": {"enabled": true, "mode": "smooth", "strength": 45, "opacity": 100},
       "visuals": {"enabled": true},
       "color": {"exposure": 0, "contrast": 0, "saturation": 100, "vibrance": 0, "temperature": 0, "tint": 0},
       "lut": {"id": "neutral", "intensity": 100},
@@ -71,7 +71,7 @@ Json DefaultSettings() {
       "display": {"monitor": 0},
       "app": {"autoUpdate": true, "keepPanelSharp": false, "hotkeys": true, "trayHintShown": false},
       "memory": {"lowPriority": false, "autoTrim": false, "autoTrimAt": 85, "gameBoost": true},
-      "perf": {"gameMode": true, "quality": "efficient", "hideClockInGames": true,
+      "perf": {"gameMode": true, "quality": "full", "hideClockInGames": true,
                "games": [{"exe": "robloxplayerbeta.exe", "mode": "pause"}, {"exe": "hd-player.exe", "mode": "pause"},
                          {"exe": "minecraft.windows.exe", "mode": "pause"}, {"exe": "cs2.exe", "mode": "pause"},
                          {"exe": "valorant-win64-shipping.exe", "mode": "pause"}, {"exe": "fortniteclient-win64-shipping.exe", "mode": "pause"},
@@ -100,6 +100,13 @@ void LoadSettings() {
         Json j = Json::parse(text, &ok);
         if (ok && j.isObj()) DeepMerge(g_settings, j);
     }
+    // v1.1: Efficient (half-res) trails showed halos, and plain trails look like echoes at 60 Hz.
+    // Move existing installs to the new Smooth mode and Full quality once; users can switch back.
+    if (!g_settings.boolean("app.migratedSmooth", false)) {
+        g_settings["app"]["migratedSmooth"] = true;
+        if (g_settings.str("blur.mode", "smooth") == "trail") g_settings["blur"]["mode"] = "smooth";
+        g_settings["perf"]["quality"] = "full";
+    }
 }
 
 void SaveSettingsNow() { WriteFileBytes(SettingsPath(), g_settings.dump()); }
@@ -121,9 +128,11 @@ void SaveMacros() { WriteFileBytes(MacrosPath(), g_macros.MacrosJson().dump()); 
 EffectParams ParamsFrom(const Json& s) {
     EffectParams p;
     p.blurOn = s.boolean("blur.enabled", true);
-    p.blurMode = s.str("blur.mode", "trail") == "blend" ? 2 : 1;
+    std::string mode = s.str("blur.mode", "smooth");
+    p.blurMode = mode == "blend" ? 2 : mode == "trail" ? 1 : 3;
+    p.opacity = (float)s.num("blur.opacity", 100);
     p.strength = (float)s.num("blur.strength", 45);
-    p.quality = s.str("perf.quality", "efficient") == "full" ? 1 : 0;
+    p.quality = s.str("perf.quality", "full") == "efficient" ? 0 : 1;
     p.visualsOn = s.boolean("visuals.enabled", true);
     p.exposure = (float)s.num("color.exposure", 0);
     p.contrast = (float)s.num("color.contrast", 0);

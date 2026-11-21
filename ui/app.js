@@ -8,7 +8,7 @@ const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const svgUse = (id, size = 14) => `<svg width="${size}" height="${size}"><use href="#${id}"/></svg>`;
 
 const DEFAULTS = {
-  blur: { enabled: true, mode: "trail", strength: 45 },
+  blur: { enabled: true, mode: "smooth", strength: 45, opacity: 100 },
   visuals: { enabled: true },
   color: { exposure: 0, contrast: 0, saturation: 100, vibrance: 0, temperature: 0, tint: 0 },
   lut: { id: "neutral", intensity: 100 },
@@ -16,7 +16,7 @@ const DEFAULTS = {
   clock: { enabled: false, style: "volt", hour24: true, seconds: true, date: true, backdrop: true, size: 100, opacity: 100, layer: "top", corner: "tr", x: 0, y: 0 },
   display: { monitor: 0 },
   app: { autoUpdate: true, keepPanelSharp: false, hotkeys: true, trayHintShown: false },
-  perf: { gameMode: true, quality: "efficient", hideClockInGames: true, games: [] },
+  perf: { gameMode: true, quality: "full", hideClockInGames: true, games: [] },
   memory: { lowPriority: false, autoTrim: false, autoTrimAt: 85, gameBoost: true },
   profiles: [],
   activeProfile: "Clean",
@@ -223,7 +223,8 @@ function setSeg(seg, attr, value) {
 // ------------------------------------------------------------------ blur view
 const refreshRate = () => state.stats.refresh || (state.monitors[get("display.monitor")] || state.monitors[0] || {}).refresh || 60;
 function trailTau(s) { return 0.004 + 0.32 * Math.pow(s / 100, 1.7); }
-function blendN(s) { return 2 + Math.round((s / 100) * 10); }
+function blendN(s) { return 2 + Math.round((s / 100) * 6); }
+function shutterOf(s) { return 0.2 + 1.3 * (s / 100); }
 
 function renderBlur() {
   const b = state.settings.blur;
@@ -238,7 +239,14 @@ function renderBlur() {
   const chip = $("#kStrengthChip");
   chip.className = "delta" + (on ? "" : " mute");
   chip.lastElementChild.textContent = on ? b.mode : "off";
-  if (b.mode === "trail") {
+  if (b.mode === "smooth") {
+    const sh = shutterOf(b.strength);
+    $("#kShutterLabel").textContent = "Shutter";
+    $("#kShutter").textContent = Math.round(sh * 360);
+    $("#kShutterUnit").textContent = "°";
+    $("#kShutterChip").textContent = "optical flow";
+    $("#kShutterNote").textContent = `${Math.round((sh * 1000) / hz)} ms of motion`;
+  } else if (b.mode === "trail") {
     const tau = trailTau(b.strength) * 1000;
     $("#kShutterLabel").textContent = "Shutter";
     $("#kShutter").textContent = Math.round(tau);
@@ -263,8 +271,11 @@ function renderBlur() {
   cmd.classList.toggle("on", !!b.enabled);
   $("#cmdLabel").textContent = b.enabled ? "Motion blur is on" : "Motion blur is off";
   Demo.kick();
-  $("#heroSub").textContent = b.mode === "trail" ? `trail, ${Math.round(trailTau(b.strength) * 1000)} ms` : `blend, ${blendN(b.strength)} frames`;
+  $("#heroSub").textContent = b.mode === "smooth" ? `smooth, ${Math.round(shutterOf(b.strength) * 360)}° shutter`
+    : b.mode === "trail" ? `trail, ${Math.round(trailTau(b.strength) * 1000)} ms` : `blend, ${blendN(b.strength)} frames`;
   $("#compareLbl").textContent = b.mode === "trail" ? "Compare frame blend" : "Compare trail";
+  const opName = $("#s_blur_opacity")?.closest(".srow")?.querySelector(".name");
+  if (opName) opName.textContent = b.mode === "smooth" ? "Blur opacity" : "Ghost opacity";
   $("#bTrail").textContent = Math.round(b.strength) + "%";
   $("#bTrailBar").style.width = b.strength + "%";
   drawChart();
@@ -275,6 +286,11 @@ function kernel(mode, s, hz, spanMs) {
   const pts = [];
   const n = Math.ceil(spanMs / dt);
   if (s <= 0) { for (let k = 0; k <= n; k++) pts.push([k * dt, k === 0 ? 1 : 0]); return pts; }
+  if (mode === "smooth") {
+    const span = shutterOf(s) * dt;
+    for (let k = 0; k <= n; k++) pts.push([k * dt, k * dt <= span + 0.01 ? 1 / Math.max(1, Math.ceil(span / dt)) : 0]);
+    return pts;
+  }
   if (mode === "trail") {
     const d = Math.exp(-(dt / 1000) / trailTau(s));
     for (let k = 0; k <= n; k++) pts.push([k * dt, (1 - d) * Math.pow(d, k)]);
@@ -314,7 +330,7 @@ function drawChart() {
     }
     return d;
   };
-  const curD = smooth(cur, b.mode === "blend");
+  const curD = smooth(cur, b.mode !== "trail");
   const otherD = smooth(other, b.mode !== "blend");
   const area = `${curD} L${X(cur.at(-1)[0])},${top + h} L${X(0)},${top + h} Z`;
   const grid = [0.5, 1].map((f) => {
@@ -761,6 +777,7 @@ function toast(text, tone = "info") {
 // ------------------------------------------------------------------ wiring
 function build() {
   makeSlider($("#heroSlider"), { path: "blur.strength", label: "Blur strength", min: 0, max: 100, step: 1, unit: "%", def: 45, hero: true });
+  makeSlider($("#opacityRows"), { path: "blur.opacity", label: "Ghost opacity", min: 0, max: 100, step: 1, unit: "%", def: 100, hint: "how strong the blur is over the sharp frame" });
   const rows = (host, defs) => defs.forEach((d) => makeSlider($(host), d));
   rows("#colorRows", [
     { path: "color.exposure", label: "Exposure", min: -2, max: 2, step: 0.05, unit: "EV", def: 0 },
@@ -952,6 +969,35 @@ const Demo = {
 
     const b = state.settings.blur;
     const s = b.enabled ? b.strength : 0;
+    const op = (b.opacity ?? 100) / 100;
+    if (s > 0 && b.mode === "smooth") {
+      // Real motion blur: average sub-frame renders across the shutter.
+      const out2 = $("#demoCanvas").getContext("2d");
+      const span = shutterOf(s) * dt, K = 8;
+      out2.setTransform(1, 0, 0, 1, 0, 0);
+      out2.globalAlpha = 1;
+      out2.drawImage(this.ring[(this.head - 1 + this.max) % this.max], 0, 0);
+      const tmp = this.tmp || (this.tmp = document.createElement("canvas"));
+      const avg = this.avg || (this.avg = document.createElement("canvas"));
+      if (tmp.width !== this.w || tmp.height !== this.h) { tmp.width = avg.width = this.w; tmp.height = avg.height = this.h; }
+      const tg = tmp.getContext("2d"), ag = avg.getContext("2d");
+      ag.setTransform(1, 0, 0, 1, 0, 0);
+      for (let k = 0; k < K; k++) {
+        this.scene(tg, this.t - span * (k + 0.5) / K + span / 2);   // sub-frames across the shutter
+        tg.setTransform(1, 0, 0, 1, 0, 0);
+        ag.globalAlpha = 1 / (k + 1);                                // running average = equal weights
+        ag.drawImage(tmp, 0, 0);
+      }
+      ag.globalAlpha = 1;
+      out2.globalAlpha = op;                                          // blur opacity over the sharp frame
+      out2.drawImage(avg, 0, 0);
+      out2.globalAlpha = 1;
+      this.cursor(out2, this.t);
+      const capS = `Dragging a window, ${Math.round(shutterOf(s) * 360)}° shutter`;
+      if ($("#demoCap").textContent !== capS) $("#demoCap").textContent = capS;
+      this.kick();
+      return;
+    }
     let ws = [1];
     if (s > 0 && b.mode === "trail") {
       ws = [];
@@ -961,12 +1007,14 @@ const Demo = {
       ws = new Array(blendN(s)).fill(1);
     }
     ws = ws.slice(0, this.filled);
+    // Ghost opacity scales every older frame's weight relative to the current one.
+    ws = ws.map((w, k) => (k === 0 ? w : w * op));
     const out = $("#demoCanvas").getContext("2d");
     out.setTransform(1, 0, 0, 1, 0, 0);
     let cum = 0;
     for (let k = ws.length - 1; k >= 0; k--) {
       cum += ws[k];
-      out.globalAlpha = ws[k] / cum;
+      out.globalAlpha = cum > 0 ? ws[k] / cum : 1;
       out.drawImage(this.ring[(this.head - 1 - k + this.max * 2) % this.max], 0, 0);
     }
     out.globalAlpha = 1;

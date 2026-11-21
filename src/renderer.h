@@ -8,9 +8,10 @@
 // Raw UI values (same units as the panel sliders).
 struct EffectParams {
     bool blurOn = true;
-    int blurMode = 1;            // 1 = trail (EMA), 2 = blend (frame average)
+    int blurMode = 3;            // 1 = trail (EMA), 2 = blend (frame average), 3 = smooth (optical flow)
+    float opacity = 100;         // 0..100: blur strength against the sharp frame
     float strength = 45;         // 0..100
-    int quality = 0;             // 0 = efficient (half-res trails), 1 = full
+    int quality = 1;             // 0 = efficient (half-res trails), 1 = full
     bool visualsOn = false;
     float exposure = 0;          // -2..2 EV
     float contrast = 0;          // -100..100

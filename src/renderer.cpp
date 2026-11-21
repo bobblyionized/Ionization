@@ -64,7 +64,7 @@ struct Constants {
     float vignette, vignetteSoft, grain, frameSeed;
     float bloom, bloomThresh, sharpen, chroma;
     float texelX, texelY, useLut, aspect;
-    float srcTexelX, srcTexelY, pad0, pad1;
+    float srcTexelX, srcTexelY, opacity, shutter;
 };
 static_assert(sizeof(Constants) % 16 == 0, "cbuffer alignment");
 
@@ -100,6 +100,8 @@ constexpr DXGI_FORMAT kSumFmt = DXGI_FORMAT_R16G16B16A16_UINT;   // exact intege
 constexpr DXGI_FORMAT kSlotFmt = DXGI_FORMAT_B8G8R8A8_UNORM;
 constexpr DXGI_FORMAT kBloomFmt = DXGI_FORMAT_R11G11B10_FLOAT;
 constexpr int kMaxBlend = 8;
+constexpr DXGI_FORMAT kLumaFmt = DXGI_FORMAT_R16_FLOAT;
+constexpr DXGI_FORMAT kVecFmt = DXGI_FORMAT_R16G16_FLOAT;
 
 } // namespace
 
@@ -118,19 +120,25 @@ struct RenderSession {
     ComPtr<ID3D11Texture2D> backTex;
 
     ComPtr<ID3D11VertexShader> vs;
-    ComPtr<ID3D11PixelShader> psComp[5], psTrailHalf, psBlendHalf, psDown, psBlurH, psBlurV;
+    ComPtr<ID3D11PixelShader> psComp[6], psTrailHalf, psBlendHalf, psDown, psBlurH, psBlurV;
+    ComPtr<ID3D11PixelShader> psLumaColor, psLumaDown, psMotionCoarse, psMotionFine;
     ComPtr<ID3D11SamplerState> sampler;
     ComPtr<ID3D11Buffer> cbuf;
 
-    // Desktop frame: either our copy (needed while blur converges) or the duplication surface itself.
+    // Our own copy of the desktop. It is updated only while we own a duplication frame, and only
+    // in the rectangles Windows reports as changed, so it can never pick up a half-written frame.
     ComPtr<ID3D11Texture2D> cap;
     ComPtr<ID3D11ShaderResourceView> capSrv;
-    ComPtr<ID3D11Texture2D> duplTex;          // last duplication surface we were handed
-    ComPtr<ID3D11ShaderResourceView> duplSrv;
-    ID3D11Texture2D* duplSrvFor = nullptr;
+    ComPtr<ID3D11Texture2D> duplTex;
     bool holding = false;
-    bool capValid = false;                    // cap holds the latest desktop frame
-    bool loggedBind = false;
+    bool capFilled = false;
+    std::vector<BYTE> meta;
+
+    // Smooth (optical flow) resources.
+    RT lumaQ[2], lumaS[2], vecS, vecQ;
+    int lumaCur = 0;
+    bool havePrevLuma = false, sharpDrawn = true;
+    LARGE_INTEGER lastNewT{};
 
     // Mode-dependent resources (allocated lazily, freed when unused).
     RT acc[2];                 // trail accumulators (full or half)
@@ -280,13 +288,15 @@ struct RenderSession {
         ComPtr<ID3DBlob> vsb;
         if (!Compile("VS", "vs_5_0", vsb)) return false;
         dev->CreateVertexShader(vsb->GetBufferPointer(), vsb->GetBufferSize(), nullptr, &vs);
-        static const char* pathNames[5] = { "0", "1", "2", "3", "4" };
-        for (int i = 0; i < 5; ++i) {
+        static const char* pathNames[6] = { "0", "1", "2", "3", "4", "5" };
+        for (int i = 0; i < 6; ++i) {
             D3D_SHADER_MACRO defs[] = { { "PATH", pathNames[i] }, { nullptr, nullptr } };
             if (!MakePS("PSComposite", psComp[i], defs)) return false;
         }
         if (!MakePS("PSTrailHalf", psTrailHalf) || !MakePS("PSBlendHalf", psBlendHalf) || !MakePS("PSBloomDown", psDown) ||
             !MakePS("PSBlurH", psBlurH) || !MakePS("PSBlurV", psBlurV)) return false;
+        if (!MakePS("PSLumaFromColor", psLumaColor) || !MakePS("PSLumaDown", psLumaDown) ||
+            !MakePS("PSMotionCoarse", psMotionCoarse) || !MakePS("PSMotionFine", psMotionFine)) return false;
 
         D3D11_SAMPLER_DESC smp{};
         smp.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
@@ -333,6 +343,10 @@ struct RenderSession {
         for (auto& r : acc) r.Reset();
         for (auto& r : sum) r.Reset();
         curH.Reset(); avgH.Reset(); ring.clear();
+        for (auto& r : lumaQ) r.Reset();
+        for (auto& r : lumaS) r.Reset();
+        vecS.Reset(); vecQ.Reset();
+        havePrevLuma = false;
         cfgMode = mode; cfgQuality = quality; cfgN = n;
         resetAccum = true; head = 0; filled = 0; cur = 0;
         int w = quality == 0 ? halfW : width, h = quality == 0 ? halfH : height;
@@ -345,6 +359,12 @@ struct RenderSession {
             ring.resize(n + 1);
             for (auto& r : ring) ok = ok && MakeRT(dev.Get(), w, h, kSlotFmt, r);
             if (ok && quality == 0) ok = MakeRT(dev.Get(), w, h, kAccFmt, avgH);
+        } else if (mode == 3) {
+            int qw = std::max(1, (width + 3) / 4), qh = std::max(1, (height + 3) / 4);
+            int sw = std::max(1, (qw + 3) / 4), sh = std::max(1, (qh + 3) / 4);
+            ok = MakeRT(dev.Get(), qw, qh, kLumaFmt, lumaQ[0]) && MakeRT(dev.Get(), qw, qh, kLumaFmt, lumaQ[1]) &&
+                 MakeRT(dev.Get(), sw, sh, kLumaFmt, lumaS[0]) && MakeRT(dev.Get(), sw, sh, kLumaFmt, lumaS[1]) &&
+                 MakeRT(dev.Get(), sw, sh, kVecFmt, vecS) && MakeRT(dev.Get(), qw, qh, kVecFmt, vecQ);
         }
         ok = ok && EnsureCap();
         if (!ok) LogLine("Configure(mode=%d quality=%d n=%d) failed", mode, quality, n);
@@ -399,7 +419,7 @@ struct RenderSession {
     }
 
     void Bind(UINT slot, ID3D11ShaderResourceView* srv) { ctx->PSSetShaderResources(slot, 1, &srv); }
-    void Unbind() { ID3D11ShaderResourceView* n[9] = {}; ctx->PSSetShaderResources(0, 9, n); }
+    void Unbind() { ID3D11ShaderResourceView* n[13] = {}; ctx->PSSetShaderResources(0, 13, n); }
 
     void Upload(const Constants& c) {
         D3D11_MAPPED_SUBRESOURCE m;
@@ -439,18 +459,32 @@ struct RenderSession {
         ctx->Unmap(st.Get(), 0);
     }
 
-    // Read the duplication surface directly when the driver allows it: saves a full-screen copy per frame.
-    ID3D11ShaderResourceView* DuplSrv() {
-        if (!duplTex) return nullptr;
-        if (duplSrvFor != duplTex.Get()) {
-            duplSrv.Reset();
-            duplSrvFor = duplTex.Get();
-            D3D11_TEXTURE2D_DESC d{};
-            duplTex->GetDesc(&d);
-            if (!loggedBind) { LogLine("Duplication surface bind flags 0x%x, misc 0x%x", d.BindFlags, d.MiscFlags); loggedBind = true; }
-            if (d.BindFlags & D3D11_BIND_SHADER_RESOURCE) dev->CreateShaderResourceView(duplTex.Get(), nullptr, &duplSrv);
+    // Bring our copy up to date while we still own the frame: only the moved/dirty rectangles.
+    void CopyChanged(const DXGI_OUTDUPL_FRAME_INFO& fi) {
+        EnsureCap();
+        auto full = [&] { ctx->CopyResource(cap.Get(), duplTex.Get()); capFilled = true; };
+        if (!capFilled || fi.TotalMetadataBufferSize == 0) { full(); return; }
+        meta.resize(fi.TotalMetadataBufferSize);
+        std::vector<D3D11_BOX> boxes;
+        UINT used = 0;
+        if (FAILED(dupl->GetFrameMoveRects((UINT)meta.size(), (DXGI_OUTDUPL_MOVE_RECT*)meta.data(), &used))) { full(); return; }
+        auto* mv = (DXGI_OUTDUPL_MOVE_RECT*)meta.data();
+        for (UINT i = 0; i < used / sizeof(DXGI_OUTDUPL_MOVE_RECT); ++i) {
+            const RECT& d = mv[i].DestinationRect;
+            boxes.push_back({ (UINT)d.left, (UINT)d.top, 0, (UINT)d.right, (UINT)d.bottom, 1 });
         }
-        return duplSrv.Get();
+        if (FAILED(dupl->GetFrameDirtyRects((UINT)meta.size(), (RECT*)meta.data(), &used))) { full(); return; }
+        auto* dr = (RECT*)meta.data();
+        for (UINT i = 0; i < used / sizeof(RECT); ++i)
+            boxes.push_back({ (UINT)dr[i].left, (UINT)dr[i].top, 0, (UINT)dr[i].right, (UINT)dr[i].bottom, 1 });
+        double area = 0;
+        for (auto& b : boxes) area += double(b.right - b.left) * double(b.bottom - b.top);
+        if (area > 0.6 * width * height) { full(); return; }
+        for (auto& b : boxes) {
+            if (b.right <= b.left || b.bottom <= b.top) continue;
+            b.right = std::min<UINT>(b.right, width); b.bottom = std::min<UINT>(b.bottom, height);
+            ctx->CopySubresourceRegion(cap.Get(), 0, b.left, b.top, 0, duplTex.Get(), 0, &b);
+        }
     }
 
     Result Frame() {
@@ -475,7 +509,7 @@ struct RenderSession {
             if (std::clamp(p.monitor, 0, std::max(0, (int)mons.size() - 1)) != monitorIndex) return Restart;
         }
 
-        int mode = (p.blurOn && p.strength > 0) ? std::clamp(p.blurMode, 1, 2) : 0;
+        int mode = (p.blurOn && p.strength > 0) ? std::clamp(p.blurMode, 1, 3) : 0;
         float s = std::clamp(p.strength, 0.0f, 100.0f) / 100.0f;
         int n = 2 + (int)std::lround(s * (kMaxBlend - 2));
         int quality = p.quality ? 1 : 0;
@@ -490,7 +524,10 @@ struct RenderSession {
         bool converged;
         if (mode == 1) converged = std::pow(std::exp(-dtNominal / tau), (float)framesSinceNew) < 1e-3f;
         else if (mode == 2) converged = framesSinceNew >= n;
+        else if (mode == 3) converged = sharpDrawn;   // smooth: once motion stops, draw one sharp frame
         else converged = framesSinceNew >= 1;
+        // Smooth mode: no new frame for ~45 ms means things stopped moving.
+        bool stillNow = mode == 3 && haveFrame && float(now.QuadPart - lastNewT.QuadPart) / float(qpf.QuadPart) > 0.045f;
         bool grainTick = p.visualsOn && p.grain > 0 &&
             float(now.QuadPart - lastGrainT.QuadPart) / float(qpf.QuadPart) >= 1.0f / 24.0f;
         bool idle = haveFrame && converged && !paramsChanged && !resetAccum && !owner->raise_ && dump.empty();
@@ -498,6 +535,7 @@ struct RenderSession {
         // Release the frame we held, right before asking for the next one (as the docs advise).
         if (holding) { dupl->ReleaseFrame(); holding = false; }
         UINT timeout = !haveFrame ? 500 : (idle ? (p.visualsOn && p.grain > 0 ? 42 : 250) : 0);
+        if (mode == 3 && !idle && !sharpDrawn && !paramsChanged && !resetAccum) timeout = 16;   // wake to draw the still frame
         if (GetEnvironmentVariableW(L"IONIZATION_DEBUG_CAPTUREONLY", nullptr, 0) > 0) timeout = 20;   // benchmarking only
         DXGI_OUTDUPL_FRAME_INFO fi{};
         ComPtr<IDXGIResource> res;
@@ -509,6 +547,7 @@ struct RenderSession {
                 res.As(&duplTex);
                 newFrame = true;
                 ++captures;
+                CopyChanged(fi);          // while we own the frame
             }
         } else if (hr != DXGI_ERROR_WAIT_TIMEOUT) {
             LogLine("AcquireNextFrame 0x%08x", hr);
@@ -524,9 +563,9 @@ struct RenderSession {
         if (!Configure(mode, quality, n)) return Lost;
         if (newFrame) {
             framesSinceNew = 0;
-            capValid = false;
-            if (!DuplSrv()) { EnsureCap(); ctx->CopyResource(cap.Get(), duplTex.Get()); capValid = true; }
             haveFrame = true;
+            lastNewT = now;
+            if (mode == 3) sharpDrawn = false;
         } else if (haveFrame) {
             ++framesSinceNew;
         }
@@ -535,7 +574,8 @@ struct RenderSession {
         static const bool captureOnly = GetEnvironmentVariableW(L"IONIZATION_DEBUG_CAPTUREONLY", nullptr, 0) > 0;   // benchmarking only
         if (captureOnly) { presentedLast = false; QueryPerformanceCounter(&now); UpdateStats(now); return Continue; }
         QueryPerformanceCounter(&now);
-        bool mustDraw = newFrame || paramsChanged || resetAccum || !converged || grainTick || !dump.empty() || !shown;
+        bool mustDraw = newFrame || paramsChanged || resetAccum || grainTick || !dump.empty() || !shown ||
+            (mode == 3 ? (!sharpDrawn && stillNow) : !converged);
         if (!mustDraw) { presentedLast = false; UpdateStats(now); return Continue; }
         if (grainTick || newFrame) lastGrainT = now;
 
@@ -544,6 +584,10 @@ struct RenderSession {
 
         Constants c{};
         c.decay = (mode == 1 && !resetAccum) ? std::exp(-dt / tau) : 0.0f;
+        c.opacity = std::clamp(p.opacity, 0.0f, 100.0f) / 100.0f;
+        // Smooth: how much of the frame-to-frame motion the "shutter" smears (CapCut-like at ~1).
+        bool sharpFrame = mode == 3 && !newFrame && stillNow;
+        c.shutter = (mode == 3 && !sharpFrame) ? 0.2f + 1.3f * s : 0.0f;
         bool vis = p.visualsOn;
         c.exposure = vis ? p.exposure : 0;
         c.contrast = vis ? p.contrast / 100.0f : 0;
@@ -597,15 +641,38 @@ struct RenderSession {
         ID3D11Buffer* cb = cbuf.Get();
         ctx->PSSetConstantBuffers(0, 1, &cb);
 
-        // Moving screen: read the surface we hold. Still screen: no update has been written since,
-        // so the surface still holds the last frame; copy it once and redraw from the copy.
-        ID3D11ShaderResourceView* curSrv = nullptr;
-        if (holding && newFrame && DuplSrv()) curSrv = DuplSrv();
-        else {
-            if (!capValid && duplTex) { EnsureCap(); ctx->CopyResource(cap.Get(), duplTex.Get()); capValid = true; }
-            curSrv = capSrv.Get();
-        }
+        ID3D11ShaderResourceView* curSrv = capSrv.Get();
         if (!curSrv) return Continue;
+
+        // Smooth: build the luma pyramid for this frame and estimate motion against the last one.
+        if (mode == 3 && newFrame) {
+            int lc = lumaCur, lp = lumaCur ^ 1;
+            Constants m = c;
+            m.srcTexelX = 1.0f / width; m.srcTexelY = 1.0f / height;
+            Upload(m);
+            Bind(8, curSrv);
+            ID3D11RenderTargetView* r = lumaQ[lc].rtv.Get();
+            Pass(psLumaColor.Get(), 1, &r, lumaQ[lc].w, lumaQ[lc].h);
+            Unbind();
+            m.srcTexelX = 1.0f / lumaQ[lc].w; m.srcTexelY = 1.0f / lumaQ[lc].h;
+            Upload(m);
+            Bind(8, lumaQ[lc].srv.Get()); r = lumaS[lc].rtv.Get();
+            Pass(psLumaDown.Get(), 1, &r, lumaS[lc].w, lumaS[lc].h);
+            Unbind();
+            if (havePrevLuma && !resetAccum) {
+                Bind(9, lumaS[lc].srv.Get()); Bind(10, lumaS[lp].srv.Get()); r = vecS.rtv.Get();
+                Pass(psMotionCoarse.Get(), 1, &r, vecS.w, vecS.h);
+                Unbind();
+                Bind(9, lumaQ[lc].srv.Get()); Bind(10, lumaQ[lp].srv.Get()); Bind(11, vecS.srv.Get()); r = vecQ.rtv.Get();
+                Pass(psMotionFine.Get(), 1, &r, vecQ.w, vecQ.h);
+                Unbind();
+            } else {
+                float z[4] = { 0, 0, 0, 0 };
+                ctx->ClearRenderTargetView(vecQ.rtv.Get(), z);
+            }
+            havePrevLuma = true;
+            lumaCur ^= 1;
+        }
 
         // Bloom from the current frame at quarter resolution (tiny).
         EnsureBloom(c.bloom > 0);
@@ -634,6 +701,11 @@ struct RenderSession {
             Bind(0, curSrv); Bind(6, bloomSrv); Bind(7, lutSrv.Get());
             ID3D11RenderTargetView* r = backRtv.Get();
             Pass(psComp[0].Get(), 1, &r, width, height);
+        } else if (mode == 3) {
+            Bind(0, curSrv); Bind(12, vecQ.srv.Get()); Bind(6, bloomSrv); Bind(7, lutSrv.Get());
+            ID3D11RenderTargetView* r = backRtv.Get();
+            Pass(psComp[5].Get(), 1, &r, width, height);
+            if (sharpFrame || c.shutter == 0) sharpDrawn = true;
         } else if (mode == 1 && quality == 1) {
             Bind(0, curSrv); Bind(1, acc[prev].srv.Get()); Bind(6, bloomSrv); Bind(7, lutSrv.Get());
             ID3D11RenderTargetView* r[2] = { backRtv.Get(), acc[cur].rtv.Get() };
@@ -660,7 +732,7 @@ struct RenderSession {
             Pass(psComp[4].Get(), 1, &o, width, height);
         }
         Unbind();
-        if (mode != 0) cur ^= 1;
+        if (mode == 1 || mode == 2) cur ^= 1;
         if (mode == 2) { head = (head + 1) % slots; filled = std::min(filled + 1, n); }
 
         ctx->End(qEnd[qi].Get());

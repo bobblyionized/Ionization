@@ -6,6 +6,8 @@
 //   2 = trail, efficient: output = cur + upsample(accHalf - curHalf)   (linear space)
 //   3 = blend, full resolution, fused (writes output + running sum + ring slot)
 //   4 = blend, efficient: output = cur + upsample(avgHalf - curHalf)   (sRGB space)
+//   5 = smooth: optical-flow motion blur (each pixel is smeared along its own motion vector)
+// `opacity` scales every blur against the sharp current frame (100% = full effect).
 // Accumulators are compact on purpose: this runs next to games on shared-memory GPUs,
 // so bytes moved per pixel matter more than anything else.
 static const char kShaderSource[] = R"HLSL(
@@ -19,7 +21,7 @@ cbuffer P : register(b0) {
     float vignette; float vignetteSoft; float grain; float frameSeed;
     float bloom; float bloomThresh; float sharpen; float chroma;
     float2 texel; float useLut; float aspect;
-    float2 srcTexel; float2 pad0;
+    float2 srcTexel; float opacity; float shutter;
 };
 Texture2D tCur : register(t0);          // current desktop frame (sRGB values)
 Texture2D tAccPrev : register(t1);      // trail accumulator, sqrt(linear) in 10-bit
@@ -29,7 +31,11 @@ Texture2D tAccH : register(t4);         // efficient: half-res blurred
 Texture2D tCurH : register(t5);         // efficient: half-res current
 Texture2D tBloom : register(t6);
 Texture3D tLut : register(t7);
-Texture2D tSrc : register(t8);          // bloom chain input
+Texture2D tSrc : register(t8);          // bloom / luma chain input
+Texture2D tLumaCur : register(t9);      // smooth: luma pyramids (current / previous frame)
+Texture2D tLumaPrev : register(t10);
+Texture2D tVecCoarse : register(t11);   // smooth: 1/16-res motion (full-res pixels)
+Texture2D tVec : register(t12);         // smooth: 1/4-res motion (full-res pixels)
 SamplerState sLin : register(s0);
 
 struct V { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
@@ -82,6 +88,64 @@ BlendHalfOut PSBlendHalf(V i) {
     return o;
 }
 
+// ------------------------------------------------------------------ smooth: motion estimation
+float Luma(float3 c) { return dot(c, float3(0.299, 0.587, 0.114)); }
+
+// 4x4 box of the full-res frame (4 bilinear taps) -> quarter-res luma.
+float4 PSLumaFromColor(V i) : SV_Target {
+    float2 o = srcTexel;
+    float l = Luma(tSrc.SampleLevel(sLin, i.uv + o * float2(-1, -1), 0).rgb) + Luma(tSrc.SampleLevel(sLin, i.uv + o * float2(1, -1), 0).rgb)
+            + Luma(tSrc.SampleLevel(sLin, i.uv + o * float2(-1, 1), 0).rgb) + Luma(tSrc.SampleLevel(sLin, i.uv + o * float2(1, 1), 0).rgb);
+    return float4(l * 0.25, 0, 0, 1);
+}
+// 4x4 box of a luma texture -> next pyramid level.
+float4 PSLumaDown(V i) : SV_Target {
+    float2 o = srcTexel;
+    float l = tSrc.SampleLevel(sLin, i.uv + o * float2(-1, -1), 0).r + tSrc.SampleLevel(sLin, i.uv + o * float2(1, -1), 0).r
+            + tSrc.SampleLevel(sLin, i.uv + o * float2(-1, 1), 0).r + tSrc.SampleLevel(sLin, i.uv + o * float2(1, 1), 0).r;
+    return float4(l * 0.25, 0, 0, 1);
+}
+
+// Block matching: find where this pixel's 3x3 neighbourhood was in the previous frame.
+// Small vectors are preferred so flat or still areas stay exactly still.
+float3 Match(int2 p, int2 center, int radius, int2 size) {
+    float cur[9];
+    [unroll] for (int k = 0; k < 9; k++) cur[k] = tLumaCur.Load(int3(clamp(p + int2(k % 3 - 1, k / 3 - 1), 0, size - 1), 0)).r;
+    float best = 1e9; float2 bv = 0;
+    float zeroCost = 0;
+    [unroll] for (int z = 0; z < 9; z++) zeroCost += abs(cur[z] - tLumaPrev.Load(int3(clamp(p + int2(z % 3 - 1, z / 3 - 1), 0, size - 1), 0)).r);
+    [loop] for (int dy = -radius; dy <= radius; dy++) {
+        [loop] for (int dx = -radius; dx <= radius; dx++) {
+            int2 v = center + int2(dx, dy);
+            float cost = 0;
+            [unroll] for (int k2 = 0; k2 < 9; k2++) {
+                int2 q = clamp(p + int2(k2 % 3 - 1, k2 / 3 - 1) - v, 0, size - 1);
+                cost += abs(cur[k2] - tLumaPrev.Load(int3(q, 0)).r);
+            }
+            cost += 0.006 * (abs(v.x) + abs(v.y));
+            if (cost < best) { best = cost; bv = float2(v); }
+        }
+    }
+    // Keep it still unless moving is clearly better (avoids shimmer on noise / flat areas).
+    if (zeroCost <= best + 0.02) { bv = 0; best = zeroCost; }
+    return float3(bv, best);
+}
+
+float4 PSMotionCoarse(V i) : SV_Target {          // at 1/16 res, +-6 px search (= +-96 full-res px)
+    uint w, h; tLumaCur.GetDimensions(w, h);
+    float3 m = Match(int2(i.pos.xy), int2(0, 0), 6, int2(w, h));
+    return float4(m.xy * 16.0, 0, 1);
+}
+
+float4 PSMotionFine(V i) : SV_Target {            // at 1/4 res, refine +-2 px around the coarse guess
+    uint w, h; tLumaCur.GetDimensions(w, h);
+    uint cw, ch; tVecCoarse.GetDimensions(cw, ch);
+    int2 p = int2(i.pos.xy);
+    float2 guess = tVecCoarse.Load(int3(clamp(p / 4, 0, int2(cw, ch) - 1), 0)).xy / 4.0;
+    float3 m = Match(p, int2(round(guess)), 2, int2(w, h));
+    return float4(m.xy * 4.0, 0, 1);
+}
+
 // ------------------------------------------------------------------ bloom (quarter res)
 float4 PSBloomDown(V i) : SV_Target {
     float2 o = srcTexel;
@@ -111,25 +175,38 @@ float4 PSBlurV(V i) : SV_Target { return float4(Gauss(i.uv, float2(0, srcTexel.y
 // ------------------------------------------------------------------ blurred image, per path (linear)
 float3 BlurredAt(float2 uv) {
 #if PATH == 1
-    return lerp(ToLin(tCur.SampleLevel(sLin, uv, 0).rgb), Dec(tAccPrev.SampleLevel(sLin, uv, 0).rgb), decay);
+    return lerp(ToLin(tCur.SampleLevel(sLin, uv, 0).rgb), Dec(tAccPrev.SampleLevel(sLin, uv, 0).rgb), decay * opacity);
 #elif PATH == 2
     float3 cur = ToLin(tCur.SampleLevel(sLin, uv, 0).rgb);
     float3 aE = tAccH.SampleLevel(sLin, uv, 0).rgb, cE = tCurH.SampleLevel(sLin, uv, 0).rgb;
     float3 d = Dec(aE) - Dec(cE);
     if (max(abs(aE.r - cE.r), max(abs(aE.g - cE.g), abs(aE.b - cE.b))) < 1.5 / 1023.0) d = 0;
-    return max(cur + d, 0);
+    return max(cur + d * opacity, 0);
 #elif PATH == 3
     int3 p = int3(uv / texel, 0);
     uint3 q = (uint3)round(saturate(tCur.Load(p).rgb) * 255.0);
     uint3 s = tSumPrev.Load(p).rgb + q;
     if (blendSub > 0.5) s -= (uint3)round(tOldest.Load(p).rgb * 255.0);
-    return ToLin(s / (255.0 * blendCount));
+    return lerp(ToLin(saturate(tCur.Load(p).rgb)), ToLin(s / (255.0 * blendCount)), opacity);
 #elif PATH == 4
     float3 cur = tCur.SampleLevel(sLin, uv, 0).rgb;
     float3 a = tAccH.SampleLevel(sLin, uv, 0).rgb, c = tCurH.SampleLevel(sLin, uv, 0).rgb;
     float3 d = a - c;
     if (max(abs(d.r), max(abs(d.g), abs(d.b))) < 0.6 / 255.0) d = 0;
-    return ToLin(saturate(cur + d));
+    return ToLin(saturate(cur + d * opacity));
+#elif PATH == 5
+    float3 cur = ToLin(tCur.SampleLevel(sLin, uv, 0).rgb);
+    if (shutter <= 0) return cur;
+    float2 v = tVec.SampleLevel(sLin, uv, 0).xy * shutter;      // motion over the shutter, in pixels
+    float len = length(v);
+    if (len < 0.75) return cur;
+    int n = (int)clamp(ceil(len / 1.25), 2, 32);
+    float3 acc = 0;
+    [loop] for (int k = 0; k < n; k++) {
+        float t = (k + 0.5) / n - 0.5;                            // centred on the pixel, like a camera shutter
+        acc += ToLin(tCur.SampleLevel(sLin, uv - v * t * texel, 0).rgb);
+    }
+    return lerp(cur, acc / n, opacity);
 #else
     return ToLin(tCur.SampleLevel(sLin, uv, 0).rgb);
 #endif
@@ -190,15 +267,15 @@ CompOut PSComposite(V i) {
 #if PATH == 1
     float3 cur = ToLin(tCur.Load(p).rgb);
     float3 prev = Dec(tAccPrev.Load(p).rgb);
-    c = lerp(cur, prev, decay);
-    o.acc = float4(saturate(Enc(c) + Dither(i.pos.xy) / 1023.0), 1);
+    o.acc = float4(saturate(Enc(lerp(cur, prev, decay)) + Dither(i.pos.xy) / 1023.0), 1);
+    c = lerp(cur, prev, decay * opacity);   // ghost opacity only changes what you see, not the trail itself
 #elif PATH == 3
     uint3 q = (uint3)round(saturate(tCur.Load(p).rgb) * 255.0);
     uint3 s = tSumPrev.Load(p).rgb + q;
     if (blendSub > 0.5) s -= (uint3)round(tOldest.Load(p).rgb * 255.0);
     o.sum = uint4(s, 0);
     o.slot = float4(q / 255.0, 1);
-    c = ToLin(s / (255.0 * blendCount));
+    c = lerp(ToLin(q / 255.0), ToLin(s / (255.0 * blendCount)), opacity);
 #else
     c = BlurredAt(i.uv);
 #endif
