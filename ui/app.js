@@ -854,6 +854,15 @@ const WP_LOOKS = [
   { id: "ink", name: "Ink", desc: "Drifting drops" },
   { id: "mesh", name: "Mesh", desc: "Soft color fields" },
 ];
+function gridSvg() {
+  // horizon at y=52 of a 160x100 tile; rows get closer toward the horizon, columns meet at its centre
+  let s = `<svg viewBox="0 0 160 100" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="pvgFade" gradientUnits="userSpaceOnUse" x1="0" y1="52" x2="0" y2="100">
+    <stop offset="0" stop-color="#7b4df2" stop-opacity="0"/><stop offset="1" stop-color="#7b4df2" stop-opacity=".7"/></linearGradient></defs>
+    <rect x="0" y="49" width="160" height="5" fill="#9a7bff" opacity=".35"/><g stroke="url(#pvgFade)" stroke-width=".7" fill="none">`;
+  for (let i = 1; i <= 7; i++) { const y = 52 + 48 * Math.pow(i / 7, 1.9); s += `<line x1="0" y1="${y.toFixed(1)}" x2="160" y2="${y.toFixed(1)}"/>`; }
+  for (let x = -120; x <= 280; x += 20) s += `<line x1="80" y1="52" x2="${x}" y2="100"/>`;
+  return s + `</g><rect class="pulse" x="0" y="52" width="160" height="1.2" fill="#d4f53c"/></svg>`;
+}
 function baseName(p) { return (p || "").split(/[\\/]/).pop(); }
 function renderWallpaperStatus() {
   const el = $("#wpStatus");
@@ -873,7 +882,7 @@ function renderWallpaper() {
   setSeg($("#wpDisplaysSeg"), "v", W.displays === "all" ? "all" : "one");
   $$(".wp-pane").forEach((p) => p.classList.toggle("on", p.dataset.pane === W.source));
   $("#wpGallery").innerHTML = WP_LOOKS.map((l) => `<button class="wpt${W.shader === l.id ? " on" : ""}" data-look="${l.id}">
-    <span class="pv ${l.id}"><i></i><i></i></span><span><span class="nm" style="display:block">${l.name}</span><span class="ds" style="display:block">${l.desc}</span></span></button>`).join("");
+    <span class="pv ${l.id}">${l.id === "grid" ? gridSvg() : "<i></i><i></i>"}</span><span><span class="nm" style="display:block">${l.name}</span><span class="ds" style="display:block">${l.desc}</span></span></button>`).join("");
   $$("#wpGallery [data-look]").forEach((b) => b.addEventListener("click", () => {
     W.shader = b.dataset.look; W.source = "shader";
     if (!W.enabled) W.enabled = true;
