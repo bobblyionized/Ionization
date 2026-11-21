@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ionization</title>
+<link rel="preload" href="fonts/InterTight.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/JetBrainsMono.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<!-- Icon sprite: hand-drawn 16px line icons -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-logo" viewBox="0 0 16 16"><path d="M2.5 5.5h4.2M1.8 8h5.4M2.5 10.5h4.2" stroke="#f3f4f6" stroke-width="1.3" stroke-linecap="round" opacity=".7"/><circle cx="10.6" cy="8" r="3.2" fill="#d4f53c"/></symbol>
+    <symbol id="i-blur" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M1.75 5.5h5M1.75 8h4M1.75 10.5h5" opacity=".75"/><circle cx="10.75" cy="8" r="3.25"/></symbol>
+    <symbol id="i-color" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M8 1.9c2.3 2.7 4.6 5.1 4.6 7.6A4.6 4.6 0 0 1 8 14.1a4.6 4.6 0 0 1-4.6-4.6C3.4 7 5.7 4.6 8 1.9Z"/><path d="M8 5.2v8.9" opacity=".6"/><path d="M8 9.4c1.3 0 2.4-.5 3.3-1.2M8 12.2c1.7 0 3.1-.7 4-1.6" opacity=".6"/></symbol>
+    <symbol id="i-lut" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M8 1.8 13.6 5v6L8 14.2 2.4 11V5L8 1.8Z"/><path d="M2.6 5.1 8 8.2l5.4-3.1M8 8.2v5.9" opacity=".65"/></symbol>
+    <symbol id="i-fx" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="5.6"/><circle cx="8" cy="8" r="2.4" opacity=".7"/><path d="M8 .9v1.4M8 13.7v1.4M.9 8h1.4M13.7 8h1.4" opacity=".6"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><rect x="1.8" y="3" width="12.4" height="10" rx="2.2"/><path d="M5 7.2v1.6M7.2 6.4v3.2M9.6 7.2v1.6M11.4 6.4v3.2" opacity=".8"/></symbol>
+    <symbol id="i-profiles" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M8 2 14 5 8 8 2 5 8 2Z"/><path d="m2 8 6 3 6-3M2 11l6 3 6-3" opacity=".65"/></symbol>
+    <symbol id="i-display" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1.6" y="2.4" width="12.8" height="8.6" rx="1.6"/><path d="M5.5 14h5M8 11v3"/></symbol>
+    <symbol id="i-about" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="6.1"/><path d="M8 7.2v3.9"/><circle cx="8" cy="4.9" r=".5" fill="currentColor"/></symbol>
+    <symbol id="i-min" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M4 8.5h8"/></symbol>
+    <symbol id="i-close" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="m4.5 4.5 7 7M11.5 4.5l-7 7"/></symbol>
+    <symbol id="i-key" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="1.5" y="4" width="13" height="8" rx="1.8"/><path d="M4.2 6.6h.01M6.8 6.6h.01M9.3 6.6h.01M11.8 6.6h.01M5 9.4h6" stroke-linecap="round"/></symbol>
+    <symbol id="i-up" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8.2V2M2.4 4.5 5 1.9l2.6 2.6"/></symbol>
+    <symbol id="i-down" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 1.8V8M2.4 5.5 5 8.1l2.6-2.6"/></symbol>
+    <symbol id="i-pulse" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 5.2h2l1.2-2.6 1.6 4.8L7 5.2h2"/></symbol>
+    <symbol id="i-import" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.2v7.6M4.9 6.9 8 10l3.1-3.1"/><path d="M2.6 10.6v1.6c0 .9.7 1.6 1.6 1.6h7.6c.9 0 1.6-.7 1.6-1.6v-1.6"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M1.9 4.4c0-.8.6-1.4 1.4-1.4h2.9l1.5 1.6h5c.8 0 1.4.6 1.4 1.4v5.8c0 .8-.6 1.4-1.4 1.4H3.3c-.8 0-1.4-.6-1.4-1.4V4.4Z"/></symbol>
+    <symbol id="i-move" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8v12.4M1.8 8h12.4M6 3.8 8 1.8l2 2M6 12.2l2 2 2-2M3.8 6l-2 2 2 2M12.2 6l2 2-2 2"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10M6.4 4.5V3h3.2v1.5M4.4 4.5l.6 8.3c0 .4.4.7.8.7h4.4c.4 0 .8-.3.8-.7l.6-8.3"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13.2 6.4A5.4 5.4 0 0 0 3.3 5M2.8 9.6a5.4 5.4 0 0 0 9.9 1.4"/><path d="M13.4 2.8v3.6H9.8M2.6 13.2V9.6h3.6"/></symbol>
+    <symbol id="i-link" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9.2 2.6h4.2v4.2M13.2 2.8 7.4 8.6"/><path d="M11.4 9.4v2.8c0 .7-.6 1.3-1.3 1.3H3.8c-.7 0-1.3-.6-1.3-1.3V5.9c0-.7.6-1.3 1.3-1.3h2.8"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></symbol>
+  </defs>
+</svg>
+
+<div class="window">
+  <header class="topbar" id="topbar">
+    <div class="brand">
+      <span class="logo"><svg width="16" height="16"><use href="#i-logo"/></svg></span>
+      <span class="brand-name">Ionization</span>
+      <span class="badge" id="displayBadge">Display</span>
+    </div>
+    <div class="command" title="Global hotkeys">
+      <svg width="14" height="14"><use href="#i-key"/></svg>
+      <span class="label">Toggle motion blur</span>
+      <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>B</kbd>
+    </div>
+    <div class="top-right">
+      <span class="live"><i class="dot" id="liveDot"></i><b id="liveText">Idle</b><span id="liveSub">effects off</span></span>
+      <span class="avatar">IO</span>
+      <div class="winbtns">
+        <button class="winbtn" data-action="minimize" aria-label="Minimize"><svg width="16" height="16"><use href="#i-min"/></svg></button>
+        <button class="winbtn close" data-action="close" aria-label="Close to tray"><svg width="16" height="16"><use href="#i-close"/></svg></button>
+      </div>
+    </div>
+  </header>
+
+  <div class="body">
+    <nav class="sidebar">
+      <ul class="nav" id="nav">
+        <li><button data-view="blur" class="active"><svg class="ico" width="16" height="16"><use href="#i-blur"/></svg>Motion Blur<i class="pip" data-pip="blur"></i></button></li>
+        <li><button data-view="color"><svg class="ico" width="16" height="16"><use href="#i-color"/></svg>Color<i class="pip" data-pip="visuals"></i></button></li>
+        <li><button data-view="luts"><svg class="ico" width="16" height="16"><use href="#i-lut"/></svg>LUTs</button></li>
+        <li><button data-view="fx"><svg class="ico" width="16" height="16"><use href="#i-fx"/></svg>Effects</button></li>
+        <li><button data-view="clock"><svg class="ico" width="16" height="16"><use href="#i-clock"/></svg>Clock<i class="pip" data-pip="clock"></i></button></li>
+        <li><button data-view="profiles"><svg class="ico" width="16" height="16"><use href="#i-profiles"/></svg>Profiles</button></li>
+        <li class="sep"></li>
+        <li><button data-view="display"><svg class="ico" width="16" height="16"><use href="#i-display"/></svg>Display</button></li>
+        <li><button data-view="about"><svg class="ico" width="16" height="16"><use href="#i-about"/></svg>About<i class="pip" data-pip="update"></i></button></li>
+      </ul>
+      <div class="side-card">
+        <p class="eyebrow" style="margin:0">GPU frame time</p>
+        <p class="big num" style="margin:4px 0 0"><span id="sideMs">0.0</span><small>ms</small></p>
+        <div class="meter"><i id="sideMeter"></i></div>
+        <p class="eyebrow" style="margin:8px 0 0;letter-spacing:.02em;text-transform:none" id="sideBudget">of a 16.7 ms frame</p>
+      </div>
+      <div class="side-foot"><span class="ver" id="sideVer">v0.0.0</span><span class="tag dim" id="sideProfile">Clean</span></div>
+    </nav>
+
+    <main id="main">
+      <!-- ============================== MOTION BLUR -->
+      <section class="view active" data-view="blur">
+        <div class="viewhead">
+          <div class="tabs" id="modeTabs">
+            <button data-mode="trail" class="active">Trail</button>
+            <button data-mode="blend">Frame blend</button>
+            <i class="bar"></i>
+          </div>
+          <div class="seg" id="presetSeg">
+            <button data-preset="18">Subtle</button>
+            <button data-preset="40">Smooth</button>
+            <button data-preset="65">Cinematic</button>
+            <button data-preset="90">Max</button>
+            <i class="ind"></i>
+          </div>
+        </div>
+
+        <div class="grid">
+          <ul class="kpis" style="list-style:none;margin:0;padding:0">
+            <li class="kpi"><p class="k" style="margin:0">Strength</p><p class="v num" style="margin:6px 0 0"><span id="kStrength">45</span><small>%</small></p>
+              <div class="meta"><span class="delta" id="kStrengthChip"><svg width="10" height="10"><use href="#i-pulse"/></svg><span>trail</span></span><span>blur amount</span></div></li>
+            <li class="kpi"><p class="k" style="margin:0" id="kShutterLabel">Shutter</p><p class="v num" style="margin:6px 0 0"><span id="kShutter">120</span><small id="kShutterUnit">ms</small></p>
+              <div class="meta"><span class="delta mute" id="kShutterChip">τ decay</span><span id="kShutterNote">trail length</span></div></li>
+            <li class="kpi"><p class="k" style="margin:0">Display rate</p><p class="v num" style="margin:6px 0 0"><span id="kFps">0</span><small>fps</small></p>
+              <div class="meta"><span class="delta mute" id="kFpsChip">capture 0</span><span id="kRes">-</span></div></li>
+            <li class="kpi"><p class="k" style="margin:0">Added latency</p><p class="v num" style="margin:6px 0 0"><span id="kLat">0.0</span><small>ms</small></p>
+              <div class="meta"><span class="delta" id="kLatChip"><svg width="10" height="10"><use href="#i-down"/></svg><span>1 frame</span></span><span>input to photon</span></div></li>
+          </ul>
+
+          <div class="split">
+            <div class="card">
+              <div class="card-head">
+                <div>
+                  <p class="card-title" style="margin:0">Motion blur</p>
+                  <div class="bigval"><span class="v num" id="heroVal">45%</span><span class="delta" id="heroChip"><svg width="10" height="10"><use href="#i-up"/></svg><span>on</span></span><span class="mono" id="heroSub">trail, 120 ms</span></div>
+                </div>
+                <label class="switch"><input type="checkbox" data-bind="blur.enabled"><span class="track"><span class="knob"></span></span><span class="lbl">Enabled</span></label>
+              </div>
+              <div class="hero-slider" id="heroSlider"></div>
+              <div class="ticks"><span>0</span><span>25</span><span>50</span><span>75</span><span>100</span></div>
+              <div class="card-head" style="margin-top:22px;align-items:center">
+                <p class="hint" style="margin:0">Frame weights over the last <span id="chartSpan">300</span> ms</p>
+                <label class="switch"><input type="checkbox" id="compareToggle" checked><span class="track"><span class="knob"></span></span><span class="lbl" id="compareLbl">Compare frame blend</span></label>
+              </div>
+              <div class="chart" id="chart"></div>
+            </div>
+
+            <div class="stack">
+              <div class="card">
+                <p class="card-title" style="margin:0 0 0">Live pipeline</p>
+                <div class="bars" id="liveBars">
+                  <div class="bar-row"><div class="top"><span>Present rate</span><span id="bPresent">0 fps</span></div><div class="track"><i id="bPresentBar"></i></div></div>
+                  <div class="bar-row"><div class="top"><span>Capture rate</span><span id="bCapture">0 fps</span></div><div class="track"><i id="bCaptureBar"></i></div></div>
+                  <div class="bar-row"><div class="top"><span>GPU budget</span><span id="bGpu">0%</span></div><div class="track"><i id="bGpuBar"></i></div></div>
+                  <div class="bar-row"><div class="top"><span>Trail</span><span id="bTrail">0%</span></div><div class="track"><i id="bTrailBar"></i></div></div>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-head" style="align-items:center"><p class="card-title" style="margin:0">Shortcuts</p><i class="dot on" id="hkDot"></i></div>
+                <ul class="list" style="margin-top:12px" id="hkList"></ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================== COLOR -->
+      <section class="view" data-view="color">
+        <div class="viewhead">
+          <div><p class="title" style="margin:0">Color</p><p class="subtitle" style="margin:2px 0 0">Tone and white balance, applied to the whole screen</p></div>
+          <div style="display:flex;gap:12px;align-items:center">
+            <button class="btn ghost sm" data-reset="color">Reset</button>
+            <label class="switch"><input type="checkbox" data-bind="visuals.enabled"><span class="track"><span class="knob"></span></span><span class="lbl">Color &amp; effects</span></label>
+          </div>
+        </div>
+        <div class="split" data-needs-visuals>
+          <div class="card"><p class="card-title" style="margin:0">Tone</p><div class="rows" id="colorRows"></div></div>
+          <div class="stack">
+            <div class="card"><div class="card-head"><p class="card-title" style="margin:0">Preview</p><span class="tag dim">approx.</span></div>
+              <div class="preview" style="margin-top:12px"><canvas id="colorPreview" width="320" height="200"></canvas><span class="cap" id="colorCap">neutral</span></div></div>
+            <div class="card"><p class="card-title" style="margin:0">White balance</p><div class="rows" id="wbRows"></div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================== LUTS -->
+      <section class="view" data-view="luts">
+        <div class="viewhead">
+          <div><p class="title" style="margin:0">LUTs</p><p class="subtitle" style="margin:2px 0 0">3D color lookup tables, built-in looks or your own .cube files</p></div>
+          <div style="display:flex;gap:8px">
+            <button class="btn ghost sm" data-action="openLutFolder"><svg width="14" height="14"><use href="#i-folder"/></svg>Folder</button>
+            <button class="btn sm" data-action="importLut"><svg width="14" height="14"><use href="#i-import"/></svg>Import .cube</button>
+          </div>
+        </div>
+        <div class="split" data-needs-visuals>
+          <div class="card"><div class="card-head" style="align-items:center"><p class="card-title" style="margin:0">Library</p><span class="tag dim" id="lutCount">0 LUTS</span></div>
+            <ul class="list" style="margin-top:12px" id="lutList"></ul></div>
+          <div class="stack">
+            <div class="card"><div class="card-head"><p class="card-title" style="margin:0">Active look</p><span class="tag" id="lutActiveTag">NEUTRAL</span></div>
+              <div class="preview" style="margin-top:12px"><canvas id="lutPreview" width="320" height="200"></canvas><span class="cap" id="lutCap">before / after</span></div>
+              <div class="rows" id="lutRows"></div></div>
+            <div class="card"><p class="card-title" style="margin:0">About .cube</p><p class="note" style="margin:8px 0 0">Any 3D LUT in Adobe/Resolve <b>.cube</b> format works (sizes 2 to 129). LUTs are applied after tone and white balance, in display (sRGB) space.</p></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================== EFFECTS -->
+      <section class="view" data-view="fx">
+        <div class="viewhead">
+          <div><p class="title" style="margin:0">Effects</p><p class="subtitle" style="margin:2px 0 0">Lens and film treatments on top of everything</p></div>
+          <div style="display:flex;gap:12px;align-items:center">
+            <button class="btn ghost sm" data-reset="fx">Reset</button>
+            <label class="switch"><input type="checkbox" data-bind="visuals.enabled"><span class="track"><span class="knob"></span></span><span class="lbl">Color &amp; effects</span></label>
+          </div>
+        </div>
+        <div class="split" data-needs-visuals>
+          <div class="grid">
+            <div class="card"><p class="card-title" style="margin:0">Lens</p><div class="rows" id="lensRows"></div></div>
+            <div class="card"><p class="card-title" style="margin:0">Glow</p><div class="rows" id="glowRows"></div></div>
+          </div>
+          <div class="stack">
+            <div class="card"><div class="card-head"><p class="card-title" style="margin:0">Preview</p><span class="tag dim">approx.</span></div>
+              <div class="preview" style="margin-top:12px"><canvas id="fxPreview" width="320" height="200"></canvas></div></div>
+            <div class="card"><p class="card-title" style="margin:0">Film</p><div class="rows" id="filmRows"></div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================== CLOCK -->
+      <section class="view" data-view="clock">
+        <div class="viewhead">
+          <div class="seg" id="clockStyleSeg">
+            <button data-v="volt">Volt</button><button data-v="mono">Mono</button><button data-v="minimal">Minimal</button><i class="ind"></i>
+          </div>
+          <div style="display:flex;gap:12px;align-items:center">
+            <button class="btn sm" id="clockMoveBtn"><svg width="14" height="14"><use href="#i-move"/></svg><span>Move clock</span></button>
+            <label class="switch"><input type="checkbox" data-bind="clock.enabled"><span class="track"><span class="knob"></span></span><span class="lbl">Show clock</span></label>
+          </div>
+        </div>
+        <div class="split">
+          <div class="grid">
+            <div class="card">
+              <div class="card-head"><p class="card-title" style="margin:0">Preview</p><span class="tag dim" id="clockLayerTag">ON TOP</span></div>
+              <div class="clockstage" style="margin-top:12px" id="clockStage">
+                <div class="clockw" id="clockW"><div class="time"><span id="cwTime">00:00</span><span class="sec" id="cwSec">00</span></div><div class="date"><i class="dot on"></i><span id="cwDate">MON 01 JAN</span></div></div>
+              </div>
+            </div>
+            <div class="card"><p class="card-title" style="margin:0">Size</p><div class="rows" id="clockRows"></div></div>
+          </div>
+          <div class="stack">
+            <div class="card">
+              <p class="card-title" style="margin:0 0 10px">Placement</p>
+              <div class="opt-row"><div><div class="t">Position</div><div class="s" id="clockPosText">Top right of the work area</div></div>
+                <div class="corners" id="cornerPick">
+                  <button data-c="tl" title="Top left"></button><button data-c="tc" title="Top center"></button><button data-c="tr" title="Top right"></button>
+                  <button data-c="bl" title="Bottom left"></button><button class="blank"></button><button data-c="br" title="Bottom right"></button>
+                </div></div>
+              <div class="opt-row"><div><div class="t">Layer</div><div class="s">On top stays crisp above blur</div></div>
+                <div class="seg sm" id="clockLayerSeg"><button data-v="top">On top</button><button data-v="desktop">Desktop</button><i class="ind"></i></div></div>
+            </div>
+            <div class="card">
+              <p class="card-title" style="margin:0 0 10px">Format</p>
+              <div class="opt-row"><div class="t">24-hour time</div><label class="switch"><input type="checkbox" data-bind="clock.hour24"><span class="track"><span class="knob"></span></span></label></div>
+              <div class="opt-row"><div class="t">Seconds</div><label class="switch"><input type="checkbox" data-bind="clock.seconds"><span class="track"><span class="knob"></span></span></label></div>
+              <div class="opt-row"><div class="t">Date line</div><label class="switch"><input type="checkbox" data-bind="clock.date"><span class="track"><span class="knob"></span></span></label></div>
+              <div class="opt-row"><div class="t">Glass backdrop</div><label class="switch"><input type="checkbox" data-bind="clock.backdrop"><span class="track"><span class="knob"></span></span></label></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================== PROFILES -->
+      <section class="view" data-view="profiles">
+        <div class="viewhead">
+          <div><p class="title" style="margin:0">Profiles</p><p class="subtitle" style="margin:2px 0 0">One click swaps blur, color, LUT and effects together</p></div>
+          <form id="saveProfile" style="display:flex;gap:8px">
+            <input class="field" id="profileName" placeholder="Name this look" maxlength="24" autocomplete="off">
+            <button class="btn primary sm" type="submit" style="height:32px"><svg width="14" height="14"><use href="#i-plus"/></svg>Save current</button>
+          </form>
+        </div>
+        <div class="pgrid" id="profileGrid"></div>
+      </section>
+
+      <!-- ============================== DISPLAY -->
+      <section class="view" data-view="display">
+        <div class="viewhead">
+          <div><p class="title" style="margin:0">Display</p><p class="subtitle" style="margin:2px 0 0">Where effects render, and how Ionization behaves</p></div>
+          <button class="btn ghost sm" data-action="refreshMonitors"><svg width="14" height="14"><use href="#i-refresh"/></svg>Rescan</button>
+        </div>
+        <div class="split">
+          <div class="card"><div class="card-head" style="align-items:center"><p class="card-title" style="margin:0">Monitors</p><span class="tag dim" id="monCount">0 FOUND</span></div>
+            <ul class="list" style="margin-top:12px" id="monList"></ul></div>
+          <div class="stack">
+            <div class="card">
+              <p class="card-title" style="margin:0 0 10px">Behavior</p>
+              <div class="opt-row"><div><div class="t">Keep panel sharp</div><div class="s">This window floats above the effects</div></div><label class="switch"><input type="checkbox" data-bind="app.keepPanelSharp"><span class="track"><span class="knob"></span></span></label></div>
+              <div class="opt-row"><div><div class="t">Launch at startup</div><div class="s">Starts in the tray when you sign in</div></div><label class="switch"><input type="checkbox" id="autostartToggle"><span class="track"><span class="knob"></span></span></label></div>
+              <div class="opt-row"><div><div class="t">Global hotkeys</div><div class="s">Ctrl+Alt+B, V and C</div></div><label class="switch"><input type="checkbox" data-bind="app.hotkeys"><span class="track"><span class="knob"></span></span></label></div>
+            </div>
+            <div class="card"><p class="card-title" style="margin:0">Good to know</p>
+              <ul class="lim">
+                <li>Your cursor stays sharp; it is drawn above every window.</li>
+                <li>Exclusive-fullscreen games bypass the overlay. Borderless works.</li>
+                <li>DRM video (some streaming sites) captures as black under effects.</li>
+                <li>Clicks always pass straight through to your apps.</li>
+              </ul></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================== ABOUT -->
+      <section class="view" data-view="about">
+        <div class="viewhead">
+          <div><p class="title" style="margin:0">About</p><p class="subtitle" style="margin:2px 0 0">Ionization, a visual changer for Windows 11</p></div>
+          <button class="btn ghost sm" data-action="openRepo"><svg width="14" height="14"><use href="#i-link"/></svg>GitHub</button>
+        </div>
+        <div class="split">
+          <div class="card">
+            <div class="card-head"><div><p class="card-title" style="margin:0">Updates</p>
+              <div class="bigval"><span class="v num" id="aboutVer">v0.0.0</span><span class="delta" id="updChip"><span>current</span></span></div></div>
+              <label class="switch"><input type="checkbox" data-bind="app.autoUpdate"><span class="track"><span class="knob"></span></span><span class="lbl">Auto-update</span></label></div>
+            <p class="note" style="margin:12px 0 0" id="updText">Ionization checks GitHub for new builds on launch and every six hours, verifies the download, and restarts itself in under a second.</p>
+            <div class="progress" id="updProg" style="display:none"><i id="updBar"></i></div>
+            <div style="display:flex;gap:8px;margin-top:16px"><button class="btn" data-action="checkUpdate" id="checkBtn"><svg width="14" height="14"><use href="#i-refresh"/></svg>Check now</button></div>
+          </div>
+          <div class="stack">
+            <div class="card"><p class="card-title" style="margin:0">How it works</p>
+              <p class="note" style="margin:8px 0 0">Every refresh, the desktop is captured on the GPU with <b>Desktop Duplication</b>, blended with previous frames in linear light, graded, and presented in a click-through layer that is <b>excluded from its own capture</b>, so there is no feedback loop.</p></div>
+            <div class="card"><p class="card-title" style="margin:0">Credits</p>
+              <p class="note" style="margin:8px 0 0">Inter Tight and JetBrains Mono under the SIL Open Font License. Built with Direct3D 11, DirectComposition and WebView2.</p></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <div class="toasts" id="toasts"></div>
+</div>
+<script src="looks.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
