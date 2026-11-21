@@ -20,7 +20,7 @@ namespace {
 
 const wchar_t* kPanelClass = L"IonizationPanel";
 const wchar_t* kHost = L"https://ionization.local/";
-enum { TIMER_STATS = 1, TIMER_SAVE, TIMER_UPDATE, TIMER_ZORDER, TIMER_DUMP, TIMER_EXIT };
+enum { TIMER_STATS = 1, TIMER_SAVE, TIMER_UPDATE, TIMER_ZORDER, TIMER_DUMP, TIMER_EXIT, TIMER_SHOW };
 enum { HK_BLUR = 1, HK_VISUALS, HK_CLOCK };
 enum { IDM_SHOW = 100, IDM_BLUR, IDM_VISUALS, IDM_CLOCK, IDM_QUIT };
 #define WM_APP_SHOW (WM_APP + 10)
@@ -34,7 +34,7 @@ std::string g_clockApplied;
 ComPtr<ICoreWebView2Environment> g_env;
 ComPtr<ICoreWebView2Controller> g_ctl;
 ComPtr<ICoreWebView2> g_wv;
-bool g_startHidden = false, g_navigated = false, g_quitting = false;
+bool g_startHidden = false, g_navigated = false, g_quitting = false, g_shownOnce = false;
 bool g_hotkeysOk[4] = {};
 Json g_lastUpdate;
 std::wstring g_dumpPath;
@@ -288,6 +288,15 @@ void ShowPanel() {
     if (g_ctl) { g_ctl->put_IsVisible(TRUE); ResizeWebView(); g_ctl->NotifyParentWindowPositionChanged(); }
 }
 
+// First show: the window was shown cloaked so WebView2 could paint; uncloak it now.
+void RevealPanel() {
+    if (g_shownOnce || g_startHidden) return;
+    g_shownOnce = true;
+    BOOL cloak = FALSE;
+    DwmSetWindowAttribute(g_hwnd, DWMWA_CLOAK, &cloak, sizeof(cloak));
+    ShowPanel();
+}
+
 void HidePanel() {
     ShowWindow(g_hwnd, SW_HIDE);
     if (g_ctl) g_ctl->put_IsVisible(FALSE);
@@ -384,6 +393,11 @@ void ImportLut() {
 void HandleMessage(const Json& m) {
     std::string type = m.str("type", "");
     if (type == "ready") { SendInit(); return; }
+    if (type == "painted") {
+        KillTimer(g_hwnd, TIMER_SHOW);
+        RevealPanel();
+        return;
+    }
     if (type == "settings") {
         if (const Json* v = m.find("value"); v && v->isObj()) {
             g_settings = DefaultSettings();
@@ -532,7 +546,8 @@ void CreateWebView() {
                             LogLine("Navigation completed ok=%d status=%d", ok, (int)st);
                             if (!g_navigated) {
                                 g_navigated = true;
-                                if (!g_startHidden) ShowPanel();
+                                // Normally the page reports "painted"; this is only a fallback.
+                                if (!g_startHidden) SetTimer(g_hwnd, TIMER_SHOW, 2000, nullptr);
                             }
                             return S_OK;
                         }).Get(), &tok);
@@ -660,6 +675,10 @@ LRESULT CALLBACK PanelProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         case TIMER_EXIT:
             Quit();
             break;
+        case TIMER_SHOW:
+            KillTimer(h, TIMER_SHOW);
+            RevealPanel();
+            break;
         }
         return 0;
     case WM_DESTROY:
@@ -752,6 +771,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     DwmExtendFrameIntoClientArea(g_hwnd, &margins);
     SetWindowPos(g_hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 
+    if (!g_startHidden) {
+        // Show cloaked: WebView2 only paints in a shown window, but nobody should see it empty.
+        BOOL cloak = TRUE;
+        DwmSetWindowAttribute(g_hwnd, DWMWA_CLOAK, &cloak, sizeof(cloak));
+        ShowWindow(g_hwnd, SW_SHOW);
+    }
     g_taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
     AddTrayIcon();
     ApplyHotkeys();

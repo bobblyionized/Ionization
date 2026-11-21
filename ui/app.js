@@ -71,6 +71,7 @@ function onHost(msg) {
       if (msg.update) state.update = msg.update;
       renderAll();
       if (msg.view) showView(msg.view);
+      reportPainted();
       if (state.update && state.update.status === "updated") toast(`Updated to v${state.update.latest}`, "ok");
       break;
     case "state":
@@ -527,7 +528,7 @@ function renderProfiles() {
       applyProfile(p);
     });
     grid.appendChild(el);
-    requestAnimationFrame(() => Looks.render($("canvas", el), profileSettings(p)));
+    if ($(".view.active")?.dataset.view === "profiles") requestAnimationFrame(() => Looks.render($("canvas", el), profileSettings(p)));
   }
   if (!(state.settings.profiles || []).length) {
     const e = document.createElement("div");
@@ -548,7 +549,7 @@ function renderMonitors() {
     const li = document.createElement("li");
     li.className = "click";
     li.innerHTML = `<div class="lead"><span class="logo" style="width:32px;height:32px;border-radius:8px;color:${i === cur ? "var(--volt)" : "var(--fg-3)"}">${svgUse("i-display", 16)}</span>
-      <div><p class="t" style="margin:0">${escapeHtml(m.name)}${m.primary ? ` <span class="badge" style="height:17px;font-size:9.5px;margin-left:6px">PRIMARY</span>` : ""}</p>
+      <div><p class="t" style="margin:0">${escapeHtml(m.name)}${m.primary ? ` <span class="badge" style="height:18px;font-size:11px;margin-left:6px">PRIMARY</span>` : ""}</p>
       <p class="s" style="margin:2px 0 0">${m.width}x${m.height} · ${m.refresh} Hz · ${escapeHtml(m.device.replace(/^\\\\\.\\/, ""))}</p></div></div>
       <div class="r">${i === cur ? `<span class="tag">rendering</span>` : `<span class="tag dim">use</span>`}</div>`;
     li.addEventListener("click", () => { set("display.monitor", i); renderMonitors(); renderHeader(); });
@@ -718,6 +719,7 @@ function showView(v) {
     $$(".seg").forEach(placeIndicator);
     placeTabBar($("#modeTabs"));
     if (v === "blur") { drawChart(); Demo.kick(); }
+    if (v === "profiles") renderProfiles();
     schedulePreviews();
   });
 }
@@ -868,5 +870,12 @@ const Mock = {
 };
 
 build();
+// Tell the host once the first real frame is on screen, so the window never shows empty.
+let painted = false;
+function reportPainted() {
+  if (painted) return;
+  painted = true;
+  document.fonts.ready.then(() => requestAnimationFrame(() => requestAnimationFrame(() => send("painted"))));
+}
 document.fonts.ready.then(() => { renderAll(); });
 send("ready");
