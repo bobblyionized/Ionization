@@ -9,6 +9,7 @@
 #include "gamemode.h"
 #include "gpuload.h"
 #include "memory.h"
+#include "macro.h"
 #include <shellapi.h>
 #include <shobjidl.h>
 #include <shlwapi.h>
@@ -24,7 +25,7 @@ namespace {
 const wchar_t* kPanelClass = strstr(IONIZATION_VERSION, "dev") ? L"IonizationPanelDev" : L"IonizationPanel";
 const wchar_t* kHost = L"https://ionization.local/";
 enum { TIMER_STATS = 1, TIMER_SAVE, TIMER_UPDATE, TIMER_ZORDER, TIMER_DUMP, TIMER_EXIT, TIMER_SHOW,
-       TIMER_GAME, TIMER_RAISECHECK, TIMER_UNLOAD, TIMER_MEM };
+       TIMER_GAME, TIMER_RAISECHECK, TIMER_UNLOAD, TIMER_MEM, TIMER_MACRO, TIMER_RECTEST };
 enum { HK_BLUR = 1, HK_VISUALS, HK_CLOCK };
 enum { IDM_SHOW = 100, IDM_BLUR, IDM_VISUALS, IDM_CLOCK, IDM_ADDGAME, IDM_QUIT };
 #define WM_APP_SHOW (WM_APP + 10)
@@ -48,6 +49,7 @@ std::string g_startView;
 GameMode g_game;
 GpuLoad g_gpuLoad;
 MemoryOptimizer g_mem;
+MacroEngine g_macros;
 ULONGLONG g_lastTrim = 0;
 bool g_revealPending = false, g_raiseCheckPending = false;
 HWINEVENTHOOK g_hookFg = nullptr, g_hookReorder = nullptr;
@@ -102,6 +104,19 @@ void LoadSettings() {
 
 void SaveSettingsNow() { WriteFileBytes(SettingsPath(), g_settings.dump()); }
 void SaveSoon() { SetTimer(g_hwnd, TIMER_SAVE, 400, nullptr); }
+
+std::wstring MacrosPath() { return AppDataDir() + L"\\macros.json"; }
+void LoadMacros() {
+    std::string text;
+    Json list = Json::array();
+    if (ReadFileBytes(MacrosPath(), text)) {
+        bool ok = false;
+        Json j = Json::parse(text, &ok);
+        if (ok && j.isArr()) list = j;
+    }
+    g_macros.SetMacros(list);
+}
+void SaveMacros() { WriteFileBytes(MacrosPath(), g_macros.MacrosJson().dump()); }
 
 EffectParams ParamsFrom(const Json& s) {
     EffectParams p;
@@ -238,6 +253,8 @@ void SendInit() {
     if (!g_startView.empty()) j["view"] = g_startView;
     j["game"] = GameJson();
     j["focused"] = GetForegroundWindow() == g_hwnd;
+    j["macros"] = g_macros.MacrosJson();
+    j["macroStatus"] = g_macros.StatusJson();
     PostToUI(j);
 }
 
@@ -461,6 +478,7 @@ void Quit() {
     g_clock.Apply(ClockSettings{});
     RemoveTrayIcon();
     g_mem.RestoreAll();
+    g_macros.StopAll();
     if (g_hookFg) UnhookWinEvent(g_hookFg);
     if (g_hookReorder) UnhookWinEvent(g_hookReorder);
     if (g_ctl) g_ctl->Close();
@@ -606,6 +624,28 @@ void HandleMessage(const Json& m) {
         }
         return;
     }
+    if (type == "macros") {
+        if (const Json* v = m.find("value"); v && v->isArr()) { g_macros.SetMacros(*v); SaveMacros(); }
+        return;
+    }
+    if (type == "macroRecord") {
+        if (m.boolean("start", false)) {
+            g_macros.StartRecording(m.boolean("mouse", true), m.boolean("relative", false));
+            SetTimer(g_hwnd, TIMER_MACRO, 250, nullptr);
+        } else {
+            KillTimer(g_hwnd, TIMER_MACRO);
+            Json j = Json::object(); j["type"] = "macroRecorded"; j["steps"] = g_macros.StopRecording(); PostToUI(j);
+        }
+        Json st = Json::object(); st["type"] = "macroStatus"; st["value"] = g_macros.StatusJson(); PostToUI(st);
+        return;
+    }
+    if (type == "macroPlay") {
+        std::string id = m.str("id", "");
+        const Json& list = g_macros.MacrosJson();
+        for (size_t i = 0; i < list.arr.size(); ++i) if (list.arr[i].str("id", "") == id) { g_macros.Play((int)i); break; }
+        return;
+    }
+    if (type == "macroStop") { g_macros.StopAll(); return; }
     if (type == "memSnapshot") {
         Json j = Json::object(); j["type"] = "mem"; j["value"] = MemJson(g_mem.Snapshot(12)); PostToUI(j); return;
     }
@@ -834,6 +874,7 @@ LRESULT CALLBACK PanelProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         HidePanel();
         return 0;
     case WM_HOTKEY:
+        if (g_macros.OnHotkey((int)w)) return 0;
         if (w == HK_BLUR) ToggleSetting("blur", "enabled");
         else if (w == HK_VISUALS) ToggleSetting("visuals", "enabled");
         else if (w == HK_CLOCK) ToggleSetting("clock", "enabled");
@@ -870,6 +911,14 @@ LRESULT CALLBACK PanelProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_APP_UPDATE:
         OnUpdateStatus((std::string*)l);
         return 0;
+    case WM_APP_MACRO:
+        if (w == 1 || w == 2) g_macros.OnTrigger((int)l, w == 1);
+        else {
+            if (l == 2 && !g_macros.Recording()) KillTimer(h, TIMER_MACRO);   // emergency stop
+            Json st = Json::object(); st["type"] = "macroStatus"; st["value"] = g_macros.StatusJson(); PostToUI(st);
+            if (l == 2) Toast("All macros stopped", "ok");
+        }
+        return 0;
     case WM_TIMER:
         switch (w) {
         case TIMER_SAVE: KillTimer(h, TIMER_SAVE); SaveSettingsNow(); break;
@@ -889,6 +938,16 @@ LRESULT CALLBACK PanelProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         case TIMER_GAME:
             GameTick();
             break;
+        case TIMER_RECTEST: {
+            KillTimer(h, TIMER_RECTEST);
+            WriteFileBytes(LocalDataDir() + L"\\rectest.json", g_macros.StopRecording().dump());
+            Quit();
+            break;
+        }
+        case TIMER_MACRO: {
+            Json st = Json::object(); st["type"] = "macroStatus"; st["value"] = g_macros.StatusJson(); PostToUI(st);
+            break;
+        }
         case TIMER_MEM: {
             ApplyMemory();
             if (g_settings.boolean("memory.autoTrim", false) && GetTickCount64() - g_lastTrim > 120000) {
@@ -1055,6 +1114,13 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     SetTimer(g_hwnd, TIMER_GAME, 500, nullptr);
     SetTimer(g_hwnd, TIMER_MEM, 15000, nullptr);
     ApplyMemory();
+    g_macros.Init(g_hwnd);
+    LoadMacros();
+    if (std::wstring rt = ArgValue(argc, argv, L"--record-test"); !rt.empty()) {
+        // Test harness: record for N ms, write the converted steps, exit.
+        g_macros.StartRecording(true, false);
+        SetTimer(g_hwnd, TIMER_RECTEST, (UINT)_wtoi(rt.c_str()), nullptr);
+    }
     SetTimer(g_hwnd, TIMER_ZORDER, 2000, nullptr);
     SetTimer(g_hwnd, TIMER_UPDATE, 6 * 60 * 60 * 1000, nullptr);
     // Never check on the launch right after an update (guards against any update loop).

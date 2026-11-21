@@ -46,6 +46,7 @@ add_executable(Ionization WIN32
   src/gamemode.cpp
   src/gpuload.cpp
   src/memory.cpp
+  src/macro.cpp
   "${CMAKE_BINARY_DIR}/app.rc"
   "${UI_RC}"
 )
@@ -67,3 +68,8 @@ target_link_libraries(Ionization PRIVATE
 add_executable(fpsbench tools/fpsbench/main.cpp)
 target_compile_definitions(fpsbench PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
 target_link_libraries(fpsbench PRIVATE d3d11 dxgi d3dcompiler user32)
+
+# Test tool (not shipped): logs the input it receives, for checking macro playback.
+add_executable(inputprobe tools/inputprobe/main.cpp)
+target_compile_definitions(inputprobe PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+target_link_libraries(inputprobe PRIVATE user32 gdi32)
