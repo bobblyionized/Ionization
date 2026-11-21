@@ -25,6 +25,25 @@ Windows has no global post-processing hook, so Ionization does what screen shade
 
 The panel is a WebView2 page embedded in the exe.
 
+## Performance and Game Mode
+
+Ionization **pauses itself when a game is focused**. That covers any fullscreen app, plus any exe in the game list, which is editable in **Performance**. While paused, the overlay and screen capture are fully torn down, so the game presents directly and runs at native speed. Games can opt in to keep effects, using the low-cost renderer.
+
+Measured on an Intel Iris Xe laptop (i5-1145G7, 1920×1200 @ 60 Hz) with `tools/fpsbench`, a GPU-bound test game running at about 75–100 fps:
+
+| Setup | Game FPS vs. no Ionization |
+|---|---|
+| Game Mode (paused) | 0% (overlay and capture are gone) |
+| Effects kept, trail, v1.1 renderer | about −8% |
+| Effects kept, trail, v1.0.6 | −12% |
+| Effects kept, blend, v1.0.6 | −20% |
+
+About 5 points of the kept cost come from Windows Desktop Duplication itself. Any whole-screen effect pays it. The rest is Ionization's rendering:
+- one fused pass with 10-bit accumulators;
+- an O(1) integer box sum for blend mode;
+- half-resolution trails by default;
+- no full-screen copy while the screen moves, and no drawing at all while it's still.
+
 ## Limits
 
 - The mouse cursor stays sharp, because it draws above every window.

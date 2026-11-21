@@ -10,6 +10,7 @@ struct EffectParams {
     bool blurOn = true;
     int blurMode = 1;            // 1 = trail (EMA), 2 = blend (frame average)
     float strength = 45;         // 0..100
+    int quality = 0;             // 0 = efficient (half-res trails), 1 = full
     bool visualsOn = false;
     float exposure = 0;          // -2..2 EV
     float contrast = 0;          // -100..100
@@ -29,8 +30,8 @@ struct EffectParams {
 
 struct RenderStats {
     bool running = false;
-    float fps = 0, captureFps = 0, gpuMs = 0;
-    int width = 0, height = 0, refresh = 0;
+    float fps = 0, captureFps = 0, gpuMs = 0, skippedFps = 0;
+    int width = 0, height = 0, refresh = 0, quality = 0;
 };
 
 class Renderer {
@@ -43,12 +44,15 @@ public:
     RenderStats Stats();
     HWND Overlay() const { return overlay_.load(); }
     void RequestDump(const std::wstring& path);
+    // Ask the render thread to put the overlay back on top (it owns the window).
+    void RequestRaise() { raise_ = true; }
     bool feedbackTest = false;   // --no-exclude: overlay is NOT excluded from capture
 
 private:
     void ThreadMain();
     std::thread thread_;
     std::atomic<bool> stop_{ false };
+    std::atomic<bool> raise_{ false };
     std::atomic<HWND> overlay_{ nullptr };
     HWND notify_ = nullptr;
     std::mutex mu_;

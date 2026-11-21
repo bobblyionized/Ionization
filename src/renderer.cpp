@@ -11,6 +11,7 @@
 #include <DirectXPackedVector.h>
 #include <cmath>
 #include <algorithm>
+#include <vector>
 
 using Microsoft::WRL::ComPtr;
 
@@ -57,13 +58,13 @@ void Renderer::RequestDump(const std::wstring& path) {
 namespace {
 
 struct Constants {
-    float decay, ringCount, blurMode, lutMix;
+    float decay, lutMix, blendCount, blendSub;
     float exposure, contrast, saturation, vibrance;
     float temperature, tint, warmth, lutSize;
     float vignette, vignetteSoft, grain, frameSeed;
     float bloom, bloomThresh, sharpen, chroma;
     float texelX, texelY, useLut, aspect;
-    float srcTexelX, srcTexelY, ringHead, ringCap;
+    float srcTexelX, srcTexelY, pad0, pad1;
 };
 static_assert(sizeof(Constants) % 16 == 0, "cbuffer alignment");
 
@@ -78,6 +79,8 @@ struct RT {
     ComPtr<ID3D11RenderTargetView> rtv;
     ComPtr<ID3D11ShaderResourceView> srv;
     int w = 0, h = 0;
+    explicit operator bool() const { return tex != nullptr; }
+    void Reset() { tex.Reset(); rtv.Reset(); srv.Reset(); w = h = 0; }
 };
 
 bool MakeRT(ID3D11Device* dev, int w, int h, DXGI_FORMAT fmt, RT& rt) {
@@ -91,6 +94,12 @@ bool MakeRT(ID3D11Device* dev, int w, int h, DXGI_FORMAT fmt, RT& rt) {
     rt.w = w; rt.h = h;
     return true;
 }
+
+constexpr DXGI_FORMAT kAccFmt = DXGI_FORMAT_R10G10B10A2_UNORM;   // 4 B/px
+constexpr DXGI_FORMAT kSumFmt = DXGI_FORMAT_R16G16B16A16_UINT;   // exact integer box sum
+constexpr DXGI_FORMAT kSlotFmt = DXGI_FORMAT_B8G8R8A8_UNORM;
+constexpr DXGI_FORMAT kBloomFmt = DXGI_FORMAT_R11G11B10_FLOAT;
+constexpr int kMaxBlend = 8;
 
 } // namespace
 
@@ -109,17 +118,30 @@ struct RenderSession {
     ComPtr<ID3D11Texture2D> backTex;
 
     ComPtr<ID3D11VertexShader> vs;
-    ComPtr<ID3D11PixelShader> psAccum, psDown, psBlurH, psBlurV, psGrade;
+    ComPtr<ID3D11PixelShader> psComp[5], psTrailHalf, psBlendHalf, psDown, psBlurH, psBlurV;
     ComPtr<ID3D11SamplerState> sampler;
     ComPtr<ID3D11Buffer> cbuf;
 
+    // Desktop frame: either our copy (needed while blur converges) or the duplication surface itself.
     ComPtr<ID3D11Texture2D> cap;
     ComPtr<ID3D11ShaderResourceView> capSrv;
-    RT accum[2];
+    ComPtr<ID3D11Texture2D> duplTex;          // last duplication surface we were handed
+    ComPtr<ID3D11ShaderResourceView> duplSrv;
+    ID3D11Texture2D* duplSrvFor = nullptr;
+    bool holding = false;
+    bool capValid = false;                    // cap holds the latest desktop frame
+    bool loggedBind = false;
+
+    // Mode-dependent resources (allocated lazily, freed when unused).
+    RT acc[2];                 // trail accumulators (full or half)
+    RT curH;                   // efficient trail: half-res current
+    RT sum[2];                 // blend running sums (full or half)
+    std::vector<RT> ring;      // blend ring slots (N + 1)
+    RT avgH;                   // efficient blend: half-res average
     RT bloomA, bloomB;
-    ComPtr<ID3D11Texture2D> ring;
-    ComPtr<ID3D11ShaderResourceView> ringSrv;
-    int ringCap = 0, ringHead = 0, ringFilled = 0;
+    int cfgMode = -1, cfgQuality = -1, cfgN = -1;
+    int cur = 0, head = 0, filled = 0;
+
     ComPtr<ID3D11ShaderResourceView> lutSrv;
     std::string lutLoaded = "neutral";
     int lutSize = 0;
@@ -127,12 +149,12 @@ struct RenderSession {
     ComPtr<ID3D11Query> qDisjoint[4], qStart[4], qEnd[4];
     int qFrame = 0;
 
-    int width = 0, height = 0, refresh = 60, monitorIndex = 0;
-    int cur = 0;
-    bool haveFrame = false, shown = false, resetAccum = true;
-    int lastMode = 0;
-    LARGE_INTEGER qpf{}, lastT{}, statT{}, raiseT{};
-    int presents = 0, captures = 0;
+    int width = 0, height = 0, halfW = 0, halfH = 0, refresh = 60, monitorIndex = 0;
+    bool haveFrame = false, shown = false, resetAccum = true, presentedLast = false;
+    unsigned seenVersion = ~0u;
+    int framesSinceNew = 0;
+    LARGE_INTEGER qpf{}, lastT{}, statT{}, lastGrainT{};
+    int presents = 0, captures = 0, loops = 0;
     float gpuMs = 0;
     unsigned frameNo = 0;
 
@@ -140,13 +162,14 @@ struct RenderSession {
 
     ~RenderSession() {
         if (ctx) { ctx->ClearState(); ctx->Flush(); }
-        if (dupl) dupl.Reset();
+        if (dupl && holding) dupl->ReleaseFrame();
+        dupl.Reset();
         if (hwnd) { owner->overlay_ = nullptr; DestroyWindow(hwnd); }
     }
 
-    bool Compile(const char* entry, const char* target, ComPtr<ID3DBlob>& blob) {
+    bool Compile(const char* entry, const char* target, ComPtr<ID3DBlob>& blob, const D3D_SHADER_MACRO* defs = nullptr) {
         ComPtr<ID3DBlob> err;
-        HRESULT hr = D3DCompile(kShaderSource, sizeof(kShaderSource) - 1, "ionization.hlsl", nullptr, nullptr,
+        HRESULT hr = D3DCompile(kShaderSource, sizeof(kShaderSource) - 1, "ionization.hlsl", defs, nullptr,
             entry, target, D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &blob, &err);
         if (FAILED(hr)) {
             LogLine("Shader %s failed: %s", entry, err ? (const char*)err->GetBufferPointer() : "?");
@@ -154,9 +177,9 @@ struct RenderSession {
         }
         return true;
     }
-    bool MakePS(const char* entry, ComPtr<ID3D11PixelShader>& ps) {
+    bool MakePS(const char* entry, ComPtr<ID3D11PixelShader>& ps, const D3D_SHADER_MACRO* defs = nullptr) {
         ComPtr<ID3DBlob> b;
-        return Compile(entry, "ps_5_0", b) && SUCCEEDED(dev->CreatePixelShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &ps));
+        return Compile(entry, "ps_5_0", b, defs) && SUCCEEDED(dev->CreatePixelShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &ps));
     }
 
     bool Init(int monitor) {
@@ -178,6 +201,16 @@ struct RenderSession {
             levels, 2, D3D11_SDK_VERSION, &dev, nullptr, &ctx);
         if (FAILED(hr)) { LogLine("D3D11CreateDevice failed 0x%08x", hr); return false; }
 
+        // Our work is tiny; give it priority so the overlay never misses a vsync
+        // (a missed present repeats a frame, which reads as low FPS).
+        ComPtr<IDXGIDevice> dxgiDev;
+        dev.As(&dxgiDev);
+        int wantPrio = 2;
+        wchar_t pv[8];
+        if (GetEnvironmentVariableW(L"IONIZATION_GPU_PRIORITY", pv, 8)) wantPrio = _wtoi(pv);   // benchmarking only
+        HRESULT prio = dxgiDev->SetGPUThreadPriority(wantPrio);
+        if (FAILED(prio) && wantPrio > 2) prio = dxgiDev->SetGPUThreadPriority(2);
+
         ComPtr<IDXGIOutput5> out5;
         if (SUCCEEDED(output.As(&out5))) {
             DXGI_FORMAT fmts[] = { DXGI_FORMAT_B8G8R8A8_UNORM };
@@ -192,8 +225,9 @@ struct RenderSession {
         dupl->GetDesc(&dd);
         width = (int)dd.ModeDesc.Width;
         height = (int)dd.ModeDesc.Height;
+        halfW = (width + 1) / 2;
+        halfH = (height + 1) / 2;
 
-        // Overlay window covering the monitor, click-through, excluded from capture.
         static bool registered = false;
         if (!registered) {
             WNDCLASSW wc{};
@@ -206,14 +240,15 @@ struct RenderSession {
         hwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED |
             WS_EX_TRANSPARENT | WS_EX_NOREDIRECTIONBITMAP,
             L"IonizationOverlay", L"Ionization Overlay", WS_POPUP,
-            mi.rect.left, mi.rect.top, mi.rect.right - mi.rect.left, mi.rect.bottom - mi.rect.top,
+            // One pixel short of the monitor: a topmost window that exactly covers the screen is
+            // treated by Windows as a fullscreen app (Focus Assist silences notifications, and
+            // fullscreen detection fires). The swap chain stays full size; the last row is clipped.
+            mi.rect.left, mi.rect.top, mi.rect.right - mi.rect.left, mi.rect.bottom - mi.rect.top - 1,
             nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
         if (!hwnd) return false;
         SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
         if (!owner->feedbackTest) SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
 
-        ComPtr<IDXGIDevice> dxgiDev;
-        dev.As(&dxgiDev);
         ComPtr<IDXGIFactory2> f2;
         factory.As(&f2);
         DXGI_SWAP_CHAIN_DESC1 sd{};
@@ -242,12 +277,16 @@ struct RenderSession {
         swap->GetBuffer(0, IID_PPV_ARGS(&backTex));
         dev->CreateRenderTargetView(backTex.Get(), nullptr, &backRtv);
 
-        // Shaders + state.
         ComPtr<ID3DBlob> vsb;
         if (!Compile("VS", "vs_5_0", vsb)) return false;
         dev->CreateVertexShader(vsb->GetBufferPointer(), vsb->GetBufferSize(), nullptr, &vs);
-        if (!MakePS("PSAccum", psAccum) || !MakePS("PSBloomDown", psDown) || !MakePS("PSBlurH", psBlurH) ||
-            !MakePS("PSBlurV", psBlurV) || !MakePS("PSGrade", psGrade)) return false;
+        static const char* pathNames[5] = { "0", "1", "2", "3", "4" };
+        for (int i = 0; i < 5; ++i) {
+            D3D_SHADER_MACRO defs[] = { { "PATH", pathNames[i] }, { nullptr, nullptr } };
+            if (!MakePS("PSComposite", psComp[i], defs)) return false;
+        }
+        if (!MakePS("PSTrailHalf", psTrailHalf) || !MakePS("PSBlendHalf", psBlendHalf) || !MakePS("PSBloomDown", psDown) ||
+            !MakePS("PSBlurH", psBlurH) || !MakePS("PSBlurV", psBlurV)) return false;
 
         D3D11_SAMPLER_DESC smp{};
         smp.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
@@ -262,19 +301,6 @@ struct RenderSession {
         bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
         dev->CreateBuffer(&bd, nullptr, &cbuf);
 
-        D3D11_TEXTURE2D_DESC cd{};
-        cd.Width = width; cd.Height = height; cd.MipLevels = 1; cd.ArraySize = 1;
-        cd.Format = DXGI_FORMAT_B8G8R8A8_UNORM; cd.SampleDesc.Count = 1;
-        cd.Usage = D3D11_USAGE_DEFAULT; cd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        if (FAILED(dev->CreateTexture2D(&cd, nullptr, &cap))) return false;
-        dev->CreateShaderResourceView(cap.Get(), nullptr, &capSrv);
-
-        if (!MakeRT(dev.Get(), width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, accum[0]) ||
-            !MakeRT(dev.Get(), width, height, DXGI_FORMAT_R16G16B16A16_FLOAT, accum[1]) ||
-            !MakeRT(dev.Get(), std::max(1, width / 4), std::max(1, height / 4), DXGI_FORMAT_R16G16B16A16_FLOAT, bloomA) ||
-            !MakeRT(dev.Get(), std::max(1, width / 4), std::max(1, height / 4), DXGI_FORMAT_R16G16B16A16_FLOAT, bloomB))
-            return false;
-
         for (int i = 0; i < 4; ++i) {
             D3D11_QUERY_DESC q{ D3D11_QUERY_TIMESTAMP_DISJOINT, 0 };
             dev->CreateQuery(&q, &qDisjoint[i]);
@@ -285,23 +311,52 @@ struct RenderSession {
 
         QueryPerformanceFrequency(&qpf);
         QueryPerformanceCounter(&lastT);
-        statT = lastT;
+        statT = lastGrainT = lastT;
         owner->overlay_ = hwnd;
-        LogLine("Session up: monitor %d %dx%d @%dHz", monitorIndex, width, height, refresh);
+        LogLine("Session up: monitor %d %dx%d @%dHz, gpu priority hr=0x%08x", monitorIndex, width, height, refresh, prio);
         return true;
     }
 
-    bool EnsureRing(int n) {
-        if (ringCap >= n) return true;
-        ring.Reset(); ringSrv.Reset();
-        D3D11_TEXTURE2D_DESC d{};
-        d.Width = width; d.Height = height; d.MipLevels = 1; d.ArraySize = n;
-        d.Format = DXGI_FORMAT_B8G8R8A8_UNORM; d.SampleDesc.Count = 1;
-        d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        if (FAILED(dev->CreateTexture2D(&d, nullptr, &ring))) { ringCap = 0; return false; }
-        dev->CreateShaderResourceView(ring.Get(), nullptr, &ringSrv);
-        ringCap = n; ringHead = 0; ringFilled = 0;
-        return true;
+    bool EnsureCap() {
+        if (cap) return true;
+        D3D11_TEXTURE2D_DESC cd{};
+        cd.Width = width; cd.Height = height; cd.MipLevels = 1; cd.ArraySize = 1;
+        cd.Format = DXGI_FORMAT_B8G8R8A8_UNORM; cd.SampleDesc.Count = 1;
+        cd.Usage = D3D11_USAGE_DEFAULT; cd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        if (FAILED(dev->CreateTexture2D(&cd, nullptr, &cap))) return false;
+        return SUCCEEDED(dev->CreateShaderResourceView(cap.Get(), nullptr, &capSrv));
+    }
+
+    // Allocate exactly what the current mode needs and free the rest (memory is shared with games).
+    bool Configure(int mode, int quality, int n) {
+        if (mode == cfgMode && quality == cfgQuality && (mode != 2 || n == cfgN)) return true;
+        for (auto& r : acc) r.Reset();
+        for (auto& r : sum) r.Reset();
+        curH.Reset(); avgH.Reset(); ring.clear();
+        cfgMode = mode; cfgQuality = quality; cfgN = n;
+        resetAccum = true; head = 0; filled = 0; cur = 0;
+        int w = quality == 0 ? halfW : width, h = quality == 0 ? halfH : height;
+        bool ok = true;
+        if (mode == 1) {
+            ok = MakeRT(dev.Get(), w, h, kAccFmt, acc[0]) && MakeRT(dev.Get(), w, h, kAccFmt, acc[1]);
+            if (ok && quality == 0) ok = MakeRT(dev.Get(), w, h, kAccFmt, curH);
+        } else if (mode == 2) {
+            ok = MakeRT(dev.Get(), w, h, kSumFmt, sum[0]) && MakeRT(dev.Get(), w, h, kSumFmt, sum[1]);
+            ring.resize(n + 1);
+            for (auto& r : ring) ok = ok && MakeRT(dev.Get(), w, h, kSlotFmt, r);
+            if (ok && quality == 0) ok = MakeRT(dev.Get(), w, h, kAccFmt, avgH);
+        }
+        ok = ok && EnsureCap();
+        if (!ok) LogLine("Configure(mode=%d quality=%d n=%d) failed", mode, quality, n);
+        return ok;
+    }
+
+    void EnsureBloom(bool on) {
+        if (!on) { bloomA.Reset(); bloomB.Reset(); return; }
+        if (bloomA) return;
+        int w = std::max(1, width / 4), h = std::max(1, height / 4);
+        MakeRT(dev.Get(), w, h, kBloomFmt, bloomA);
+        MakeRT(dev.Get(), w, h, kBloomFmt, bloomB);
     }
 
     void EnsureLut(const std::string& id) {
@@ -333,15 +388,18 @@ struct RenderSession {
         }
     }
 
-    void Pass(ID3D11PixelShader* ps, ID3D11RenderTargetView* rtv, int w, int h) {
+    void Pass(ID3D11PixelShader* ps, UINT nrt, ID3D11RenderTargetView* const* rtvs, int w, int h) {
         D3D11_VIEWPORT vp{ 0, 0, (float)w, (float)h, 0, 1 };
         ctx->RSSetViewports(1, &vp);
-        ctx->OMSetRenderTargets(1, &rtv, nullptr);
+        ctx->OMSetRenderTargets(nrt, rtvs, nullptr);
         ctx->PSSetShader(ps, nullptr, 0);
         ctx->Draw(3, 0);
-        ID3D11RenderTargetView* none = nullptr;
-        ctx->OMSetRenderTargets(1, &none, nullptr);
+        ID3D11RenderTargetView* none[3] = {};
+        ctx->OMSetRenderTargets(3, none, nullptr);
     }
+
+    void Bind(UINT slot, ID3D11ShaderResourceView* srv) { ctx->PSSetShaderResources(slot, 1, &srv); }
+    void Unbind() { ID3D11ShaderResourceView* n[9] = {}; ctx->PSSetShaderResources(0, 9, n); }
 
     void Upload(const Constants& c) {
         D3D11_MAPPED_SUBRESOURCE m;
@@ -381,17 +439,35 @@ struct RenderSession {
         ctx->Unmap(st.Get(), 0);
     }
 
+    // Read the duplication surface directly when the driver allows it: saves a full-screen copy per frame.
+    ID3D11ShaderResourceView* DuplSrv() {
+        if (!duplTex) return nullptr;
+        if (duplSrvFor != duplTex.Get()) {
+            duplSrv.Reset();
+            duplSrvFor = duplTex.Get();
+            D3D11_TEXTURE2D_DESC d{};
+            duplTex->GetDesc(&d);
+            if (!loggedBind) { LogLine("Duplication surface bind flags 0x%x, misc 0x%x", d.BindFlags, d.MiscFlags); loggedBind = true; }
+            if (d.BindFlags & D3D11_BIND_SHADER_RESOURCE) dev->CreateShaderResourceView(duplTex.Get(), nullptr, &duplSrv);
+        }
+        return duplSrv.Get();
+    }
+
     Result Frame() {
-        if (waitable) WaitForSingleObjectEx(waitable, 100, TRUE);
+        // Only wait for the swap chain if we actually presented last time; otherwise the
+        // duplication wait below is what paces us (and sleeps when the screen is still).
+        if (presentedLast && waitable) WaitForSingleObjectEx(waitable, 100, TRUE);
         MSG msg;
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
         if (owner->stop_) return Quit;
 
         EffectParams p;
         std::wstring dump;
+        unsigned version;
         {
             std::lock_guard<std::mutex> lk(owner->mu_);
             p = owner->params_;
+            version = owner->paramsVersion_;
             dump.swap(owner->dumpPath_);
         }
         if (p.monitor != monitorIndex) {
@@ -399,55 +475,75 @@ struct RenderSession {
             if (std::clamp(p.monitor, 0, std::max(0, (int)mons.size() - 1)) != monitorIndex) return Restart;
         }
 
-        // Capture.
+        int mode = (p.blurOn && p.strength > 0) ? std::clamp(p.blurMode, 1, 2) : 0;
+        float s = std::clamp(p.strength, 0.0f, 100.0f) / 100.0f;
+        int n = 2 + (int)std::lround(s * (kMaxBlend - 2));
+        int quality = p.quality ? 1 : 0;
+        bool paramsChanged = version != seenVersion;
+        seenVersion = version;
+
+        // Has the picture settled? Then there's nothing to draw until the desktop changes.
+        LARGE_INTEGER now;
+        QueryPerformanceCounter(&now);
+        float dtNominal = 1.0f / std::max(30, refresh);
+        float tau = 0.004f + 0.32f * std::pow(s, 1.7f);
+        bool converged;
+        if (mode == 1) converged = std::pow(std::exp(-dtNominal / tau), (float)framesSinceNew) < 1e-3f;
+        else if (mode == 2) converged = framesSinceNew >= n;
+        else converged = framesSinceNew >= 1;
+        bool grainTick = p.visualsOn && p.grain > 0 &&
+            float(now.QuadPart - lastGrainT.QuadPart) / float(qpf.QuadPart) >= 1.0f / 24.0f;
+        bool idle = haveFrame && converged && !paramsChanged && !resetAccum && !owner->raise_ && dump.empty();
+
+        // Release the frame we held, right before asking for the next one (as the docs advise).
+        if (holding) { dupl->ReleaseFrame(); holding = false; }
+        UINT timeout = !haveFrame ? 500 : (idle ? (p.visualsOn && p.grain > 0 ? 42 : 250) : 0);
+        if (GetEnvironmentVariableW(L"IONIZATION_DEBUG_CAPTUREONLY", nullptr, 0) > 0) timeout = 20;   // benchmarking only
         DXGI_OUTDUPL_FRAME_INFO fi{};
         ComPtr<IDXGIResource> res;
-        HRESULT hr = dupl->AcquireNextFrame(haveFrame ? 0 : 200, &fi, &res);
+        HRESULT hr = dupl->AcquireNextFrame(timeout, &fi, &res);
+        bool newFrame = false;
         if (hr == S_OK) {
+            holding = true;
             if (fi.LastPresentTime.QuadPart != 0 || !haveFrame) {
-                ComPtr<ID3D11Texture2D> tex;
-                res.As(&tex);
-                ctx->CopyResource(cap.Get(), tex.Get());
-                haveFrame = true;
+                res.As(&duplTex);
+                newFrame = true;
                 ++captures;
             }
-            dupl->ReleaseFrame();
         } else if (hr != DXGI_ERROR_WAIT_TIMEOUT) {
             LogLine("AcquireNextFrame 0x%08x", hr);
             return Lost;
         }
+        ++loops;
+
+        if (owner->raise_.exchange(false) && hwnd) {
+            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+            PostMessageW(owner->notify_, WM_APP_RENDERER, 3, 0);
+        }
+
+        if (!Configure(mode, quality, n)) return Lost;
+        if (newFrame) {
+            framesSinceNew = 0;
+            capValid = false;
+            if (!DuplSrv()) { EnsureCap(); ctx->CopyResource(cap.Get(), duplTex.Get()); capValid = true; }
+            haveFrame = true;
+        } else if (haveFrame) {
+            ++framesSinceNew;
+        }
         if (!haveFrame) return Continue;
 
-        LARGE_INTEGER now;
+        static const bool captureOnly = GetEnvironmentVariableW(L"IONIZATION_DEBUG_CAPTUREONLY", nullptr, 0) > 0;   // benchmarking only
+        if (captureOnly) { presentedLast = false; QueryPerformanceCounter(&now); UpdateStats(now); return Continue; }
         QueryPerformanceCounter(&now);
+        bool mustDraw = newFrame || paramsChanged || resetAccum || !converged || grainTick || !dump.empty() || !shown;
+        if (!mustDraw) { presentedLast = false; UpdateStats(now); return Continue; }
+        if (grainTick || newFrame) lastGrainT = now;
+
         float dt = std::clamp(float(now.QuadPart - lastT.QuadPart) / float(qpf.QuadPart), 1.0f / 500, 1.0f / 20);
         lastT = now;
 
-        // Blur parameters.
-        int mode = (p.blurOn && p.strength > 0) ? std::clamp(p.blurMode, 1, 2) : 0;
-        if (mode != lastMode) { resetAccum = true; ringFilled = 0; lastMode = mode; }
-        float s = std::clamp(p.strength, 0.0f, 100.0f) / 100.0f;
         Constants c{};
-        c.blurMode = (float)mode;
-        if (mode == 1) {
-            float tau = 0.004f + 0.32f * std::pow(s, 1.7f);
-            c.decay = resetAccum ? 0.0f : std::exp(-dt / tau);
-        } else if (mode == 2) {
-            int n = 2 + (int)std::lround(s * 10);
-            if (EnsureRing(12)) {
-                ctx->CopySubresourceRegion(ring.Get(), D3D11CalcSubresource(0, ringHead, 1), 0, 0, 0, cap.Get(), 0, nullptr);
-                ringHead = (ringHead + 1) % ringCap;
-                ringFilled = std::min(ringFilled + 1, ringCap);
-                // Average the newest min(n, filled) slices: walk back from head.
-                c.ringCount = (float)std::min(n, ringFilled);
-                c.ringHead = (float)ringHead;   // newest slice is ringHead - 1
-                c.ringCap = (float)ringCap;
-            } else {
-                c.blurMode = 0;
-            }
-        }
-        resetAccum = false;
-
+        c.decay = (mode == 1 && !resetAccum) ? std::exp(-dt / tau) : 0.0f;
         bool vis = p.visualsOn;
         c.exposure = vis ? p.exposure : 0;
         c.contrast = vis ? p.contrast / 100.0f : 0;
@@ -472,6 +568,23 @@ struct RenderSession {
         c.aspect = (float)width / (float)height;
         ++frameNo;
 
+        // Blend bookkeeping: ring holds N+1 slots so the slot being written never equals the one leaving.
+        int slots = (int)ring.size();
+        int writeSlot = 0, oldestSlot = 0;
+        if (mode == 2) {
+            if (resetAccum) {
+                float z[4] = { 0, 0, 0, 0 };
+                ctx->ClearRenderTargetView(sum[0].rtv.Get(), z);
+                ctx->ClearRenderTargetView(sum[1].rtv.Get(), z);
+                head = 0; filled = 0;
+            }
+            writeSlot = head;
+            oldestSlot = (head + 1) % slots;     // written N frames ago
+            c.blendSub = filled >= n ? 1.0f : 0.0f;
+            c.blendCount = (float)std::min(filled + 1, n);
+        }
+        resetAccum = false;
+
         int qi = qFrame % 4;
         ctx->Begin(qDisjoint[qi].Get());
         ctx->End(qStart[qi].Get());
@@ -484,46 +597,77 @@ struct RenderSession {
         ID3D11Buffer* cb = cbuf.Get();
         ctx->PSSetConstantBuffers(0, 1, &cb);
 
-        // Pass 1: accumulate into accum[cur].
-        Upload(c);
-        int prev = cur ^ 1;
-        ID3D11ShaderResourceView* srvA[3] = { capSrv.Get(), accum[prev].srv.Get(), ringSrv.Get() };
-        ctx->PSSetShaderResources(0, 3, srvA);
-        Pass(psAccum.Get(), accum[cur].rtv.Get(), width, height);
-        ID3D11ShaderResourceView* nulls[7] = {};
-        ctx->PSSetShaderResources(0, 7, nulls);
+        // Moving screen: read the surface we hold. Still screen: no update has been written since,
+        // so the surface still holds the last frame; copy it once and redraw from the copy.
+        ID3D11ShaderResourceView* curSrv = nullptr;
+        if (holding && newFrame && DuplSrv()) curSrv = DuplSrv();
+        else {
+            if (!capValid && duplTex) { EnsureCap(); ctx->CopyResource(cap.Get(), duplTex.Get()); capValid = true; }
+            curSrv = capSrv.Get();
+        }
+        if (!curSrv) return Continue;
 
-        // Bloom passes (quarter res).
+        // Bloom from the current frame at quarter resolution (tiny).
+        EnsureBloom(c.bloom > 0);
         if (c.bloom > 0) {
             Constants b = c;
             b.srcTexelX = 1.0f / width; b.srcTexelY = 1.0f / height;
             Upload(b);
-            ID3D11ShaderResourceView* s0 = accum[cur].srv.Get();
-            ctx->PSSetShaderResources(6, 1, &s0);
-            Pass(psDown.Get(), bloomA.rtv.Get(), bloomA.w, bloomA.h);
+            Bind(8, curSrv);
+            ID3D11RenderTargetView* r = bloomA.rtv.Get();
+            Pass(psDown.Get(), 1, &r, bloomA.w, bloomA.h);
+            Unbind();
             b.srcTexelX = 1.0f / bloomA.w; b.srcTexelY = 1.0f / bloomA.h;
             Upload(b);
-            s0 = bloomA.srv.Get();
-            ctx->PSSetShaderResources(6, 1, &s0);
-            Pass(psBlurH.Get(), bloomB.rtv.Get(), bloomB.w, bloomB.h);
-            s0 = bloomB.srv.Get();
-            ctx->PSSetShaderResources(6, 1, &s0);
-            Pass(psBlurV.Get(), bloomA.rtv.Get(), bloomA.w, bloomA.h);
-            ctx->PSSetShaderResources(0, 7, nulls);
-            Upload(c);
+            Bind(8, bloomA.srv.Get()); r = bloomB.rtv.Get();
+            Pass(psBlurH.Get(), 1, &r, bloomB.w, bloomB.h);
+            Unbind();
+            Bind(8, bloomB.srv.Get()); r = bloomA.rtv.Get();
+            Pass(psBlurV.Get(), 1, &r, bloomA.w, bloomA.h);
+            Unbind();
         }
+        Upload(c);
 
-        // Final grade into the backbuffer.
-        ID3D11ShaderResourceView* srvG[3] = { accum[cur].srv.Get(), bloomA.srv.Get(), lutSrv.Get() };
-        ctx->PSSetShaderResources(3, 3, srvG);
-        Pass(psGrade.Get(), backRtv.Get(), width, height);
-        ctx->PSSetShaderResources(0, 7, nulls);
+        int prev = cur ^ 1;
+        ID3D11ShaderResourceView* bloomSrv = c.bloom > 0 ? bloomA.srv.Get() : nullptr;
+        if (mode == 0) {
+            Bind(0, curSrv); Bind(6, bloomSrv); Bind(7, lutSrv.Get());
+            ID3D11RenderTargetView* r = backRtv.Get();
+            Pass(psComp[0].Get(), 1, &r, width, height);
+        } else if (mode == 1 && quality == 1) {
+            Bind(0, curSrv); Bind(1, acc[prev].srv.Get()); Bind(6, bloomSrv); Bind(7, lutSrv.Get());
+            ID3D11RenderTargetView* r[2] = { backRtv.Get(), acc[cur].rtv.Get() };
+            Pass(psComp[1].Get(), 2, r, width, height);
+        } else if (mode == 1) {
+            Bind(0, curSrv); Bind(1, acc[prev].srv.Get());
+            ID3D11RenderTargetView* r[2] = { acc[cur].rtv.Get(), curH.rtv.Get() };
+            Pass(psTrailHalf.Get(), 2, r, halfW, halfH);
+            Unbind();
+            Bind(0, curSrv); Bind(4, acc[cur].srv.Get()); Bind(5, curH.srv.Get()); Bind(6, bloomSrv); Bind(7, lutSrv.Get());
+            ID3D11RenderTargetView* o = backRtv.Get();
+            Pass(psComp[2].Get(), 1, &o, width, height);
+        } else if (quality == 1) {
+            Bind(0, curSrv); Bind(2, sum[prev].srv.Get()); Bind(3, ring[oldestSlot].srv.Get()); Bind(6, bloomSrv); Bind(7, lutSrv.Get());
+            ID3D11RenderTargetView* r[3] = { backRtv.Get(), sum[cur].rtv.Get(), ring[writeSlot].rtv.Get() };
+            Pass(psComp[3].Get(), 3, r, width, height);
+        } else {
+            Bind(0, curSrv); Bind(2, sum[prev].srv.Get()); Bind(3, ring[oldestSlot].srv.Get());
+            ID3D11RenderTargetView* r[3] = { sum[cur].rtv.Get(), ring[writeSlot].rtv.Get(), avgH.rtv.Get() };
+            Pass(psBlendHalf.Get(), 3, r, halfW, halfH);
+            Unbind();
+            Bind(0, curSrv); Bind(4, avgH.srv.Get()); Bind(5, ring[writeSlot].srv.Get()); Bind(6, bloomSrv); Bind(7, lutSrv.Get());
+            ID3D11RenderTargetView* o = backRtv.Get();
+            Pass(psComp[4].Get(), 1, &o, width, height);
+        }
+        Unbind();
+        if (mode != 0) cur ^= 1;
+        if (mode == 2) { head = (head + 1) % slots; filled = std::min(filled + 1, n); }
 
         ctx->End(qEnd[qi].Get());
         ctx->End(qDisjoint[qi].Get());
         ++qFrame;
         if (qFrame >= 4) {
-            int ri = qFrame % 4; // oldest
+            int ri = qFrame % 4;
             D3D11_QUERY_DATA_TIMESTAMP_DISJOINT dj{};
             UINT64 t0 = 0, t1 = 0;
             if (ctx->GetData(qDisjoint[ri].Get(), &dj, sizeof(dj), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
@@ -536,45 +680,43 @@ struct RenderSession {
         }
 
         if (!dump.empty()) {
-            LogLine("dump params: blur=%d mode=%d s=%.0f vis=%d exp=%.2f sat=%.0f vig=%.0f -> cMode=%.0f decay=%.3f cSat=%.2f",
-                p.blurOn, p.blurMode, p.strength, p.visualsOn, p.exposure, p.saturation, p.vignette, c.blurMode, c.decay, c.saturation);
+            LogLine("dump: mode=%d quality=%d n=%d decay=%.3f vis=%d", mode, quality, n, c.decay, (int)vis);
             DumpBackbuffer(dump);
         }
 
         hr = swap->Present(1, 0);
         if (FAILED(hr)) { LogLine("Present 0x%08x", hr); return Lost; }
+        presentedLast = true;
         ++presents;
         if (!shown) {
             dcomp->Commit();
-            ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            static const bool noShow = GetEnvironmentVariableW(L"IONIZATION_DEBUG_NOSHOW", nullptr, 0) > 0;   // benchmarking only
+            if (!noShow) ShowWindow(hwnd, SW_SHOWNOACTIVATE);
             SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             shown = true;
             PostMessageW(owner->notify_, WM_APP_RENDERER, 1, 0);
         }
-        cur ^= 1;
-
-        // Periodically re-assert topmost so other always-on-top windows are covered too;
-        // the main thread then lifts the clock / sharp panel back above us.
-        if (float(now.QuadPart - raiseT.QuadPart) / float(qpf.QuadPart) > 0.75f) {
-            raiseT = now;
-            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
-            PostMessageW(owner->notify_, WM_APP_RENDERER, 3, 0);
-        }
-
-        float since = float(now.QuadPart - statT.QuadPart) / float(qpf.QuadPart);
-        if (since >= 0.5f) {
-            std::lock_guard<std::mutex> lk(owner->mu_);
-            owner->stats_.running = true;
-            owner->stats_.fps = presents / since;
-            owner->stats_.captureFps = captures / since;
-            owner->stats_.gpuMs = gpuMs;
-            owner->stats_.width = width;
-            owner->stats_.height = height;
-            owner->stats_.refresh = refresh;
-            presents = captures = 0;
-            statT = now;
-        }
+        UpdateStats(now);
         return Continue;
+    }
+
+    void UpdateStats(LARGE_INTEGER now) {
+        float since = float(now.QuadPart - statT.QuadPart) / float(qpf.QuadPart);
+        if (since < 0.5f) return;
+        std::lock_guard<std::mutex> lk(owner->mu_);
+        owner->stats_.running = true;
+        owner->stats_.fps = presents / since;
+        owner->stats_.captureFps = captures / since;
+        owner->stats_.skippedFps = std::max(0.0f, refresh - presents / since);
+        owner->stats_.gpuMs = presents ? gpuMs : 0.0f;
+        owner->stats_.width = width;
+        owner->stats_.height = height;
+        owner->stats_.refresh = refresh;
+        owner->stats_.quality = cfgQuality < 0 ? 0 : cfgQuality;
+        static const bool logStats = GetEnvironmentVariableW(L"IONIZATION_STATS_LOG", nullptr, 0) > 0;   // benchmarking only
+        if (logStats) LogLine("stats: presents/s=%.1f captures/s=%.1f loops/s=%.1f gpu=%.2fms", presents / since, captures / since, loops / since, gpuMs);
+        presents = captures = loops = 0;
+        statT = now;
     }
 };
 

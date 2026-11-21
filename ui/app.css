@@ -141,6 +141,11 @@ kbd {
 .nav button .ico { color: currentColor; opacity: .9; }
 .nav button.active .ico { color: var(--volt); }
 .nav .sep { height: 1px; margin: 8px 6px; background: var(--line); }
+.nav .group { margin: 14px 10px 4px; font-size: 11px; color: var(--fg-4); letter-spacing: 0.01em; }
+.nav .group:first-child { margin-top: 2px; }
+.addrow { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; margin: 14px 0 0; }
+.addrow .btn.ghost:empty { display: none; }
+.dot.warn { background: #f5a23c; box-shadow: 0 0 0 3px #f5a23c1f; }
 .nav button .pip { margin-left: auto; width: 5px; height: 5px; border-radius: 50%; background: var(--volt); box-shadow: 0 0 8px var(--volt-glow); opacity: 0; transition: opacity .3s; }
 .nav button .pip.on { opacity: 1; }
 .side-card {

@@ -6,6 +6,8 @@
 #include "clock.h"
 #include "lut.h"
 #include "updater.h"
+#include "gamemode.h"
+#include "gpuload.h"
 #include <shellapi.h>
 #include <shobjidl.h>
 #include <shlwapi.h>
@@ -20,9 +22,10 @@ namespace {
 
 const wchar_t* kPanelClass = L"IonizationPanel";
 const wchar_t* kHost = L"https://ionization.local/";
-enum { TIMER_STATS = 1, TIMER_SAVE, TIMER_UPDATE, TIMER_ZORDER, TIMER_DUMP, TIMER_EXIT, TIMER_SHOW };
+enum { TIMER_STATS = 1, TIMER_SAVE, TIMER_UPDATE, TIMER_ZORDER, TIMER_DUMP, TIMER_EXIT, TIMER_SHOW,
+       TIMER_GAME, TIMER_RAISECHECK, TIMER_UNLOAD };
 enum { HK_BLUR = 1, HK_VISUALS, HK_CLOCK };
-enum { IDM_SHOW = 100, IDM_BLUR, IDM_VISUALS, IDM_CLOCK, IDM_QUIT };
+enum { IDM_SHOW = 100, IDM_BLUR, IDM_VISUALS, IDM_CLOCK, IDM_ADDGAME, IDM_QUIT };
 #define WM_APP_SHOW (WM_APP + 10)
 
 HWND g_hwnd = nullptr;
@@ -34,13 +37,19 @@ std::string g_clockApplied;
 ComPtr<ICoreWebView2Environment> g_env;
 ComPtr<ICoreWebView2Controller> g_ctl;
 ComPtr<ICoreWebView2> g_wv;
-bool g_startHidden = false, g_navigated = false, g_quitting = false, g_shownOnce = false;
+bool g_startHidden = false, g_navigated = false, g_quitting = false;
 bool g_hotkeysOk[4] = {};
 Json g_lastUpdate;
 std::wstring g_dumpPath;
 UINT g_taskbarCreated = 0;
 bool g_panelTopmost = false;
 std::string g_startView;
+GameMode g_game;
+GpuLoad g_gpuLoad;
+bool g_revealPending = false, g_raiseCheckPending = false;
+HWINEVENTHOOK g_hookFg = nullptr, g_hookReorder = nullptr;
+void CreateWebView();
+void GameTick();
 
 // ------------------------------------------------------------------ settings
 
@@ -55,6 +64,11 @@ Json DefaultSettings() {
                 "size": 100, "opacity": 100, "layer": "top", "corner": "tr", "x": 0, "y": 0},
       "display": {"monitor": 0},
       "app": {"autoUpdate": true, "keepPanelSharp": false, "hotkeys": true, "trayHintShown": false},
+      "perf": {"gameMode": true, "quality": "efficient", "hideClockInGames": true,
+               "games": [{"exe": "robloxplayerbeta.exe", "mode": "pause"}, {"exe": "hd-player.exe", "mode": "pause"},
+                         {"exe": "minecraft.windows.exe", "mode": "pause"}, {"exe": "cs2.exe", "mode": "pause"},
+                         {"exe": "valorant-win64-shipping.exe", "mode": "pause"}, {"exe": "fortniteclient-win64-shipping.exe", "mode": "pause"},
+                         {"exe": "r5apex.exe", "mode": "pause"}, {"exe": "gta5.exe", "mode": "pause"}]},
       "profiles": [],
       "activeProfile": "Clean"
     })");
@@ -89,6 +103,7 @@ EffectParams ParamsFrom(const Json& s) {
     p.blurOn = s.boolean("blur.enabled", true);
     p.blurMode = s.str("blur.mode", "trail") == "blend" ? 2 : 1;
     p.strength = (float)s.num("blur.strength", 45);
+    p.quality = s.str("perf.quality", "efficient") == "full" ? 1 : 0;
     p.visualsOn = s.boolean("visuals.enabled", true);
     p.exposure = (float)s.num("color.exposure", 0);
     p.contrast = (float)s.num("color.contrast", 0);
@@ -185,6 +200,24 @@ Json HotkeysJson() {
     return h;
 }
 
+Json GameJson() {
+    const GameStatus& gs = g_game.Status();
+    Json j = Json::object();
+    j["inGame"] = gs.inGame;
+    j["keep"] = gs.keep;
+    j["exe"] = gs.exe;
+    j["reason"] = gs.reason;
+    j["lastExe"] = g_game.LastForeignExe();
+    return j;
+}
+
+void SendGame() {
+    Json j = Json::object();
+    j["type"] = "game";
+    j["value"] = GameJson();
+    PostToUI(j);
+}
+
 void SendInit() {
     Json j = Json::object();
     j["type"] = "init";
@@ -198,6 +231,8 @@ void SendInit() {
     j["clockEditing"] = g_clock.Editing();
     if (g_lastUpdate.isObj()) j["update"] = g_lastUpdate;
     if (!g_startView.empty()) j["view"] = g_startView;
+    j["game"] = GameJson();
+    j["focused"] = GetForegroundWindow() == g_hwnd;
     PostToUI(j);
 }
 
@@ -246,24 +281,47 @@ void UpdateTrayTip() {
     tip += L", color ";
     tip += g_settings.boolean("visuals.enabled", true) ? L"on" : L"off";
     if (g_settings.boolean("clock.enabled", false)) tip += L", clock on";
+    const GameStatus& gs = g_game.Status();
+    if (gs.inGame) tip += gs.keep ? L"\nGame: effects kept (efficient)" : L"\nPaused for " + Widen(gs.exe);
     wcsncpy_s(nid.szTip, tip.c_str(), _TRUNCATE);
     Shell_NotifyIconW(NIM_MODIFY, &nid);
 }
 
+std::vector<GameRule> GameRulesFrom(const Json& s) {
+    std::vector<GameRule> rules;
+    if (const Json* g = s.path("perf.games"); g && g->isArr()) {
+        for (auto& e : g->arr) {
+            GameRule r;
+            r.exe = e.str("exe", "");
+            for (auto& ch : r.exe) ch = (char)tolower((unsigned char)ch);
+            r.keep = e.str("mode", "pause") == "keep";
+            if (!r.exe.empty()) rules.push_back(r);
+        }
+    }
+    return rules;
+}
+
 void ApplySettings() {
+    g_game.Configure(g_settings.boolean("perf.gameMode", true), GameRulesFrom(g_settings));
+    const GameStatus& gs = g_game.Status();
     EffectParams p = ParamsFrom(g_settings);
+    if (gs.inGame && gs.keep) p.quality = 0;          // opted-in games always get the cheap path
     g_renderer.SetParams(p);
-    bool need = p.NeedsOverlay();
+    // In a game, the overlay goes away completely so the game presents directly again.
+    bool need = p.NeedsOverlay() && !(gs.inGame && !gs.keep);
     if (need && !g_renderer.IsRunning()) g_renderer.Start(g_hwnd);
     else if (!need && g_renderer.IsRunning()) g_renderer.Stop();
 
+    ClockSettings cs = ClockFrom(g_settings);
+    if (gs.inGame && g_settings.boolean("perf.hideClockInGames", true)) cs.enabled = false;
     Json clockKey = Json::object();
     if (const Json* c = g_settings.find("clock")) clockKey["c"] = *c;
     clockKey["m"] = g_settings.num("display.monitor", 0);
+    clockKey["on"] = cs.enabled;
     std::string ck = clockKey.dump();
     if (ck != g_clockApplied) {
         g_clockApplied = ck;
-        g_clock.Apply(ClockFrom(g_settings));
+        g_clock.Apply(cs);
     }
     ApplyPanelSharp();
     UpdateTrayTip();
@@ -281,25 +339,57 @@ void ToggleSetting(const char* section, const char* key) {
 
 void ResizeWebView();
 
-void ShowPanel() {
-    if (!IsWindowVisible(g_hwnd)) ShowWindow(g_hwnd, SW_SHOW);
+void FocusPanel() {
     if (IsIconic(g_hwnd)) ShowWindow(g_hwnd, SW_RESTORE);
     SetForegroundWindow(g_hwnd);
     if (g_ctl) { g_ctl->put_IsVisible(TRUE); ResizeWebView(); g_ctl->NotifyParentWindowPositionChanged(); }
 }
 
-// First show: the window was shown cloaked so WebView2 could paint; uncloak it now.
+void SetCloak(bool on) {
+    BOOL v = on ? TRUE : FALSE;
+    DwmSetWindowAttribute(g_hwnd, DWMWA_CLOAK, &v, sizeof(v));
+}
+
+// The WebView is created lazily (and unloaded after the panel sits hidden), so the window is
+// shown cloaked until the page reports its first painted frame: nobody ever sees it empty.
+void ShowPanel() {
+    KillTimer(g_hwnd, TIMER_UNLOAD);
+    if (!g_ctl) {
+        if (!g_revealPending) {
+            g_revealPending = true;
+            SetCloak(true);
+            ShowWindow(g_hwnd, SW_SHOW);
+            if (!g_env) CreateWebView();
+        }
+        return;
+    }
+    if (!IsWindowVisible(g_hwnd)) ShowWindow(g_hwnd, SW_SHOW);
+    FocusPanel();
+}
+
 void RevealPanel() {
-    if (g_shownOnce || g_startHidden) return;
-    g_shownOnce = true;
-    BOOL cloak = FALSE;
-    DwmSetWindowAttribute(g_hwnd, DWMWA_CLOAK, &cloak, sizeof(cloak));
-    ShowPanel();
+    if (!g_revealPending) return;
+    g_revealPending = false;
+    KillTimer(g_hwnd, TIMER_SHOW);
+    SetCloak(false);
+    FocusPanel();
+}
+
+void DestroyWebView() {
+    if (g_ctl) g_ctl->Close();
+    g_wv.Reset();
+    g_ctl.Reset();
+    g_env.Reset();
+    g_navigated = false;
+    LogLine("WebView unloaded (panel hidden)");
 }
 
 void HidePanel() {
+    g_revealPending = false;
     ShowWindow(g_hwnd, SW_HIDE);
     if (g_ctl) g_ctl->put_IsVisible(FALSE);
+    // Free the browser engine's memory if the panel stays closed for a minute.
+    SetTimer(g_hwnd, TIMER_UNLOAD, 60 * 1000, nullptr);
     if (!g_settings.boolean("app.trayHintShown", false)) {
         g_settings["app"]["trayHintShown"] = true;
         SaveSoon();
@@ -339,6 +429,12 @@ void ShowTrayMenu() {
     AppendMenuW(m, MF_STRING | (g_settings.boolean("visuals.enabled", true) ? MF_CHECKED : 0), IDM_VISUALS, L"Color && effects\tCtrl+Alt+V");
     AppendMenuW(m, MF_STRING | (g_settings.boolean("clock.enabled", false) ? MF_CHECKED : 0), IDM_CLOCK, L"Clock\tCtrl+Alt+C");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    std::string last = g_game.LastForeignExe();
+    if (!last.empty()) {
+        std::wstring label = L"Pause effects in " + Widen(last);
+        AppendMenuW(m, MF_STRING, IDM_ADDGAME, label.c_str());
+        AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    }
     AppendMenuW(m, MF_STRING, IDM_QUIT, L"Quit");
     SetMenuDefaultItem(m, IDM_SHOW, FALSE);
     POINT pt; GetCursorPos(&pt);
@@ -355,8 +451,63 @@ void Quit() {
     g_renderer.Stop();
     g_clock.Apply(ClockSettings{});
     RemoveTrayIcon();
+    if (g_hookFg) UnhookWinEvent(g_hookFg);
+    if (g_hookReorder) UnhookWinEvent(g_hookReorder);
     if (g_ctl) g_ctl->Close();
     DestroyWindow(g_hwnd);
+}
+
+void AddGameRule(const std::string& exe, const char* mode) {
+    if (exe.empty()) return;
+    Json& games = g_settings["perf"]["games"];
+    if (!games.isArr()) games = Json::array();
+    for (auto& e : games.arr) if (e.str("exe", "") == exe) { e["mode"] = mode; goto done; }
+    {
+        Json r = Json::object();
+        r["exe"] = exe; r["mode"] = mode;
+        games.arr.push_back(r);
+    }
+done:
+    g_game.Configure(g_settings.boolean("perf.gameMode", true), GameRulesFrom(g_settings));
+    GameTick();
+    SaveSoon();
+    SendState();
+}
+
+// Game Mode: called every 500 ms and on every foreground change.
+void GameTick() {
+    if (!g_game.Tick()) return;
+    const GameStatus& gs = g_game.Status();
+    if (gs.inGame) LogLine("Game detected: %s (%s) -> %s", gs.exe.c_str(), gs.reason.c_str(), gs.keep ? "keep effects" : "paused");
+    else LogLine("Game left, effects restored");
+    ApplySettings();
+    SendGame();
+}
+
+// Something changed z-order: only if a foreign window now sits above the overlay, ask it to rise.
+void RaiseCheck() {
+    HWND ov = g_renderer.Overlay();
+    if (!ov || !g_renderer.IsRunning()) return;
+    RECT orc; GetWindowRect(ov, &orc);
+    DWORD me = GetCurrentProcessId();
+    for (HWND h = GetWindow(ov, GW_HWNDPREV); h; h = GetWindow(h, GW_HWNDPREV)) {
+        if (!IsWindowVisible(h)) continue;
+        DWORD pid = 0; GetWindowThreadProcessId(h, &pid);
+        if (pid == me) continue;
+        BOOL cloaked = FALSE;
+        DwmGetWindowAttribute(h, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
+        if (cloaked) continue;
+        RECT r, x;
+        if (GetWindowRect(h, &r) && IntersectRect(&x, &r, &orc)) { g_renderer.RequestRaise(); return; }
+    }
+}
+
+void CALLBACK WinEventProc(HWINEVENTHOOK, DWORD event, HWND, LONG, LONG, DWORD, DWORD) {
+    if (event == EVENT_SYSTEM_FOREGROUND) GameTick();
+    if (!g_raiseCheckPending && g_renderer.IsRunning()) {
+        g_raiseCheckPending = true;
+        SetTimer(g_hwnd, TIMER_RAISECHECK, 250, nullptr);   // coalesce bursts of z-order events
+    }
 }
 
 void ResizeWebView() {
@@ -401,12 +552,15 @@ void HandleMessage(const Json& m) {
     if (type == "settings") {
         if (const Json* v = m.find("value"); v && v->isObj()) {
             g_settings = DefaultSettings();
+            if (const Json* games = v->path("perf.games")) g_settings["perf"]["games"] = *games;  // lists replace, not merge
             DeepMerge(g_settings, *v);
             ApplySettings();
+            GameTick();
             SaveSoon();
         }
         return;
     }
+    if (type == "addGame") { AddGameRule(m.str("exe", ""), m.str("mode", "pause") == "keep" ? "keep" : "pause"); return; }
     if (type == "drag") { ReleaseCapture(); SendMessageW(g_hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0); return; }
     if (type == "minimize") { ShowWindow(g_hwnd, SW_MINIMIZE); return; }
     if (type == "close") { HidePanel(); return; }
@@ -547,7 +701,7 @@ void CreateWebView() {
                             if (!g_navigated) {
                                 g_navigated = true;
                                 // Normally the page reports "painted"; this is only a fallback.
-                                if (!g_startHidden) SetTimer(g_hwnd, TIMER_SHOW, 2000, nullptr);
+                                if (g_revealPending) SetTimer(g_hwnd, TIMER_SHOW, 2000, nullptr);
                             }
                             return S_OK;
                         }).Get(), &tok);
@@ -602,6 +756,14 @@ LRESULT CALLBACK PanelProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         ResizeWebView();
         if (g_ctl) g_ctl->put_IsVisible(w != SIZE_MINIMIZED && IsWindowVisible(h));
         return 0;
+    case WM_ACTIVATE: {
+        // The live preview only animates while the panel has focus.
+        Json j = Json::object();
+        j["type"] = "focus";
+        j["value"] = LOWORD(w) != WA_INACTIVE;
+        PostToUI(j);
+        break;
+    }
     case WM_MOVE:
         if (g_ctl) g_ctl->NotifyParentWindowPositionChanged();
         return 0;
@@ -630,6 +792,7 @@ LRESULT CALLBACK PanelProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         case IDM_BLUR: ToggleSetting("blur", "enabled"); break;
         case IDM_VISUALS: ToggleSetting("visuals", "enabled"); break;
         case IDM_CLOCK: ToggleSetting("clock", "enabled"); break;
+        case IDM_ADDGAME: AddGameRule(g_game.LastForeignExe(), "pause"); break;
         case IDM_QUIT: Quit(); break;
         }
         return 0;
@@ -653,15 +816,30 @@ LRESULT CALLBACK PanelProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         switch (w) {
         case TIMER_SAVE: KillTimer(h, TIMER_SAVE); SaveSettingsNow(); break;
         case TIMER_STATS: {
+            if (!g_wv || !IsWindowVisible(h) || IsIconic(h)) break;   // nobody is looking
             RenderStats s = g_renderer.Stats();
             Json j = Json::object();
             j["type"] = "stats";
             j["running"] = g_renderer.IsRunning() && s.running;
             j["fps"] = (double)s.fps; j["captureFps"] = (double)s.captureFps; j["gpuMs"] = (double)s.gpuMs;
+            j["skipped"] = (double)s.skippedFps; j["quality"] = s.quality;
+            j["gpuLoad"] = g_gpuLoad.Sample();
             j["width"] = s.width; j["height"] = s.height; j["refresh"] = s.refresh;
             PostToUI(j);
             break;
         }
+        case TIMER_GAME:
+            GameTick();
+            break;
+        case TIMER_RAISECHECK:
+            KillTimer(h, TIMER_RAISECHECK);
+            g_raiseCheckPending = false;
+            RaiseCheck();
+            break;
+        case TIMER_UNLOAD:
+            KillTimer(h, TIMER_UNLOAD);
+            if (!IsWindowVisible(h) && g_ctl) DestroyWebView();
+            break;
         case TIMER_ZORDER:
             if (!g_renderer.IsRunning()) g_clock.Reassert();
             break;
@@ -771,19 +949,26 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     DwmExtendFrameIntoClientArea(g_hwnd, &margins);
     SetWindowPos(g_hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 
-    if (!g_startHidden) {
-        // Show cloaked: WebView2 only paints in a shown window, but nobody should see it empty.
-        BOOL cloak = TRUE;
-        DwmSetWindowAttribute(g_hwnd, DWMWA_CLOAK, &cloak, sizeof(cloak));
-        ShowWindow(g_hwnd, SW_SHOW);
-    }
+    std::wstring view = ArgValue(argc, argv, L"--view");
+    if (!view.empty()) g_startView = Narrow(view);
     g_taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
     AddTrayIcon();
     ApplyHotkeys();
+    g_game.Configure(g_settings.boolean("perf.gameMode", true), GameRulesFrom(g_settings));
+    g_game.Tick();
+    g_gpuLoad.Open(GetCurrentProcessId());
     ApplySettings();
-    CreateWebView();
+    // Started in the tray (e.g. at sign-in): don't load the browser engine until the panel opens.
+    if (!g_startHidden) ShowPanel();
+
+    // Foreground changes drive Game Mode instantly; z-order changes trigger an overlay check.
+    g_hookFg = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr, WinEventProc, 0, 0,
+        WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    g_hookReorder = SetWinEventHook(EVENT_OBJECT_REORDER, EVENT_OBJECT_REORDER, nullptr, WinEventProc, 0, 0,
+        WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 
     SetTimer(g_hwnd, TIMER_STATS, 500, nullptr);
+    SetTimer(g_hwnd, TIMER_GAME, 500, nullptr);
     SetTimer(g_hwnd, TIMER_ZORDER, 2000, nullptr);
     SetTimer(g_hwnd, TIMER_UPDATE, 6 * 60 * 60 * 1000, nullptr);
     // Never check on the launch right after an update (guards against any update loop).
@@ -793,8 +978,6 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
         std::wstring delay = ArgValue(argc, argv, L"--dump-delay");
         SetTimer(g_hwnd, TIMER_DUMP, delay.empty() ? 2500 : (UINT)_wtoi(delay.c_str()), nullptr);
     }
-    std::wstring view = ArgValue(argc, argv, L"--view");
-    if (!view.empty()) g_startView = Narrow(view);
     if (!exitAfter.empty()) SetTimer(g_hwnd, TIMER_EXIT, (UINT)_wtoi(exitAfter.c_str()), nullptr);
     if (HasArg(argc, argv, L"--updated")) {
         Json j = Json::object(); j["status"] = "updated"; j["latest"] = IONIZATION_VERSION; g_lastUpdate = j;

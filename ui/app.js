@@ -16,6 +16,7 @@ const DEFAULTS = {
   clock: { enabled: false, style: "volt", hour24: true, seconds: true, date: true, backdrop: true, size: 100, opacity: 100, layer: "top", corner: "tr", x: 0, y: 0 },
   display: { monitor: 0 },
   app: { autoUpdate: true, keepPanelSharp: false, hotkeys: true, trayHintShown: false },
+  perf: { gameMode: true, quality: "efficient", hideClockInGames: true, games: [] },
   profiles: [],
   activeProfile: "Clean",
 };
@@ -44,6 +45,8 @@ const state = {
   hotkeys: { blur: true, visuals: true, clock: true },
   update: null,
   clockEditing: false,
+  game: { inGame: false, keep: false, exe: "", reason: "", lastExe: "" },
+  focused: true,
 };
 
 // ------------------------------------------------------------------ bridge
@@ -69,6 +72,8 @@ function onHost(msg) {
       state.hotkeys = msg.hotkeys || state.hotkeys;
       state.clockEditing = !!msg.clockEditing;
       if (msg.update) state.update = msg.update;
+      if (msg.game) state.game = msg.game;
+      if ("focused" in msg) state.focused = !!msg.focused;
       renderAll();
       if (msg.view) showView(msg.view);
       reportPainted();
@@ -87,6 +92,8 @@ function onHost(msg) {
     case "clockEditing": state.clockEditing = !!msg.value; renderClock(); break;
     case "autostart": state.autostart = !!msg.value; $("#autostartToggle").checked = state.autostart; break;
     case "hotkeys": state.hotkeys = msg.value || state.hotkeys; renderShortcuts(); break;
+    case "game": state.game = msg.value || state.game; renderPerf(); renderHeader(); renderStats(); break;
+    case "focus": state.focused = !!msg.value; if (state.focused) Demo.kick(); break;
   }
 }
 if (host) host.addEventListener("message", (e) => onHost(e.data));
@@ -344,9 +351,10 @@ function renderStats() {
   const s = state.stats;
   const hz = refreshRate();
   const running = !!s.running;
-  $("#liveDot").className = "dot" + (running ? " on" : "");
-  $("#liveText").textContent = running ? "Live" : "Idle";
-  $("#liveSub").textContent = running ? `${Math.round(s.fps)} fps` : "effects off";
+  const paused = state.game.inGame && !state.game.keep;
+  $("#liveDot").className = "dot" + (running ? " on" : paused ? " warn" : "");
+  $("#liveText").textContent = running ? "Live" : paused ? "Paused" : "Idle";
+  $("#liveSub").textContent = running ? `${Math.round(s.fps)} fps` : paused ? `for ${gameName(state.game.exe)}` : "effects off";
   $("#kFps").textContent = running ? Math.round(s.fps) : 0;
   $("#kFpsChip").textContent = `capture ${running ? Math.round(s.captureFps) : 0}`;
   $("#kRes").textContent = s.width ? `${s.width}x${s.height}` : "-";
@@ -358,11 +366,14 @@ function renderStats() {
   $("#bPresentBar").style.width = (running ? clamp((s.fps / hz) * 100, 0, 100) : 0) + "%";
   $("#bCapture").textContent = `${running ? Math.round(s.captureFps) : 0} fps`;
   $("#bCaptureBar").style.width = (running ? clamp((s.captureFps / hz) * 100, 0, 100) : 0) + "%";
-  $("#bGpu").textContent = `${budget.toFixed(budget < 10 ? 1 : 0)}%`;
-  $("#bGpuBar").style.width = budget + "%";
-  $("#sideMs").textContent = running ? s.gpuMs.toFixed(2) : "0.00";
-  $("#sideMeter").style.width = Math.max(running ? 2 : 0, budget) + "%";
-  $("#sideBudget").textContent = `${budget.toFixed(1)}% of a ${frameMs.toFixed(1)} ms frame`;
+  const gl = running ? (s.gpuLoad || 0) : 0;
+  $("#bGpu").textContent = `${gl.toFixed(1)}%`;
+  $("#bGpuBar").style.width = Math.min(100, gl * 4) + "%";
+  const load = running ? (s.gpuLoad || 0) : 0;
+  $("#sideMs").textContent = load.toFixed(1);
+  $("#sideMeter").style.width = Math.max(running ? 2 : 0, Math.min(100, load * 4)) + "%";
+  $("#sideBudget").textContent = running ? `${Math.round(s.fps)} frames/s, ${Math.round(s.skipped || 0)} skipped` : paused ? `Paused for ${gameName(state.game.exe)}` : "Effects are off";
+  renderPerfStats();
 }
 
 function renderHeader() {
@@ -375,6 +386,7 @@ function renderHeader() {
   $("[data-pip=blur]").classList.toggle("on", !!(state.settings.blur.enabled && state.settings.blur.strength > 0));
   $("[data-pip=visuals]").classList.toggle("on", !!state.settings.visuals.enabled && visualsActive());
   $("[data-pip=clock]").classList.toggle("on", !!state.settings.clock.enabled);
+  $("[data-pip=game]").classList.toggle("on", !!state.game.inGame);
   $("[data-pip=update]").classList.toggle("on", !!state.update && ["available", "downloading", "restart"].includes(state.update.status));
 }
 function visualsActive() {
@@ -583,6 +595,67 @@ function renderUpdate() {
   renderHeader();
 }
 
+// ------------------------------------------------------------------ performance
+function gameName(exe) {
+  if (!exe) return "a game";
+  const known = { "robloxplayerbeta.exe": "Roblox", "hd-player.exe": "BlueStacks", "minecraft.windows.exe": "Minecraft",
+    "cs2.exe": "Counter-Strike 2", "valorant-win64-shipping.exe": "Valorant", "fortniteclient-win64-shipping.exe": "Fortnite",
+    "r5apex.exe": "Apex Legends", "gta5.exe": "GTA V", "fpsbench.exe": "fpsbench" };
+  return known[exe] || exe.replace(/\.exe$/i, "");
+}
+function renderPerfStats() {
+  const s = state.stats, g = state.game;
+  const running = !!s.running, paused = g.inGame && !g.keep;
+  $("#pStatus").textContent = paused ? "Paused" : g.inGame ? "In game" : state.settings.perf.gameMode ? "Watching" : "Off";
+  const chip = $("#pStatusChip");
+  chip.className = "delta" + (g.inGame ? "" : " mute");
+  chip.innerHTML = `<span>${g.inGame ? escapeHtml(gameName(g.exe)) : "no game"}</span>`;
+  $("#pStatusNote").textContent = paused ? "effects paused, full speed" : g.inGame ? "effects kept, efficient" : state.settings.perf.gameMode ? "pauses when a game is focused" : "Game Mode is off";
+  $("#pGpu").textContent = (running ? s.gpuLoad || 0 : 0).toFixed(1);
+  $("#pPresent").textContent = running ? Math.round(s.fps) : 0;
+  $("#pSkipChip").textContent = `${running ? Math.round(s.skipped || 0) : 0} skipped`;
+  const full = state.settings.perf.quality === "full" && !(g.inGame && g.keep);
+  $("#pQuality").textContent = full ? "Full" : "Efficient";
+  $("#pQualityChip").textContent = full ? "full-res trails" : "half-res trails";
+}
+function renderPerf() {
+  const P = state.settings.perf;
+  setSeg($("#qualitySeg"), "v", P.quality);
+  const games = P.games || [];
+  $("#gameCount").textContent = `${games.length} ${games.length === 1 ? "GAME" : "GAMES"}`;
+  const list = $("#gameList");
+  list.innerHTML = "";
+  games.forEach((g, i) => {
+    const li = document.createElement("li");
+    const live = state.game.inGame && state.game.exe === g.exe;
+    li.innerHTML = `<div class="lead"><span class="logo" style="width:32px;height:32px;border-radius:8px;color:${live ? "var(--volt)" : "var(--fg-3)"}">${svgUse("i-game", 16)}</span>
+      <div style="min-width:0"><p class="t" style="margin:0">${escapeHtml(gameName(g.exe))}</p><p class="s" style="margin:2px 0 0">${escapeHtml(g.exe)}${live ? " · running now" : ""}</p></div></div>
+      <div class="r" style="display:flex;align-items:center;gap:8px;grid-auto-flow:column">
+        <div class="seg sm"><button data-v="pause">Pause</button><button data-v="keep">Keep effects</button><i class="ind"></i></div>
+        <button class="del" title="Remove" style="color:var(--fg-4);padding:4px;border-radius:5px">${svgUse("i-trash", 14)}</button></div>`;
+    const seg = $(".seg", li);
+    $$("button", seg).forEach((b) => b.addEventListener("click", () => {
+      state.settings.perf.games[i].mode = b.dataset.v; pushSettings(); renderPerf();
+    }));
+    $(".del", li).addEventListener("click", () => { state.settings.perf.games.splice(i, 1); pushSettings(); renderPerf(); });
+    list.appendChild(li);
+    requestAnimationFrame(() => setSeg(seg, "v", g.mode || "pause"));
+  });
+  const last = state.game.lastExe;
+  const btn = $("#addLastGame");
+  btn.textContent = last && !games.some((g) => g.exe === last) ? `Add ${gameName(last)}` : "";
+  renderPerfStats();
+}
+function addGame(exe) {
+  exe = (exe || "").trim().toLowerCase();
+  if (!exe) return;
+  if (!/\.exe$/.test(exe)) exe += ".exe";
+  const games = state.settings.perf.games || (state.settings.perf.games = []);
+  if (!games.some((g) => g.exe === exe)) games.push({ exe, mode: "pause" });
+  pushSettings(); renderPerf();
+  toast(`${gameName(exe)} added to Game Mode`, "ok");
+}
+
 // ------------------------------------------------------------------ all
 function syncBinds() {
   $$("input[type=checkbox][data-bind]").forEach((el) => { el.checked = !!get(el.dataset.bind); });
@@ -596,6 +669,7 @@ function refreshFor(section) {
   if (section === "lut") renderLuts();
   if (section === "clock") renderClock();
   if (section === "app") renderShortcuts();
+  if (section === "perf") renderPerf();
 }
 function renderAll() {
   syncBinds();
@@ -608,6 +682,7 @@ function renderAll() {
   renderProfiles();
   renderMonitors();
   renderUpdate();
+  renderPerf();
   renderVisualsGate();
   schedulePreviews();
   $$(".seg").forEach(placeIndicator);
@@ -660,6 +735,9 @@ function build() {
   $("#autostartToggle").addEventListener("change", (e) => send("autostart", { value: e.target.checked }));
   $("#compareToggle").addEventListener("change", drawChart);
   $("#cmdBlur").addEventListener("click", () => set("blur.enabled", !get("blur.enabled")));
+  $$("#qualitySeg button").forEach((b) => b.addEventListener("click", () => set("perf.quality", b.dataset.v)));
+  $("#addGameForm").addEventListener("submit", (e) => { e.preventDefault(); addGame($("#addGameExe").value); $("#addGameExe").value = ""; });
+  $("#addLastGame").addEventListener("click", () => addGame(state.game.lastExe));
 
   $$("#nav button").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view)));
   $$("#modeTabs button").forEach((b) => b.addEventListener("click", () => set("blur.mode", b.dataset.mode)));
@@ -729,14 +807,15 @@ function showView(v) {
 // blurs it with the same weights the GPU uses: exponential for trail, box for blend.
 // Frames are re-averaged from a ring every tick, so there is no 8-bit ghosting.
 const Demo = {
-  ring: [], max: 32, head: 0, filled: 0, raf: 0, last: 0, t: 0, w: 0, h: 0, dpr: 1,
+  ring: [], max: 16, head: 0, filled: 0, raf: 0, last: 0, t: 0, w: 0, h: 0, dpr: 1, lastDraw: 0,
   reduce: window.matchMedia("(prefers-reduced-motion: reduce)"),
   kick() { if (!this.raf) this.raf = requestAnimationFrame((ts) => this.frame(ts)); },
-  active() { const v = $(".view.active"); return !document.hidden && v && v.dataset.view === "blur"; },
+  // Only while someone is looking: panel focused, visible, on this view.
+  active() { const v = $(".view.active"); return state.focused && !document.hidden && v && v.dataset.view === "blur"; },
   resize() {
     const c = $("#demoCanvas");
     const r = c.getBoundingClientRect();
-    const dpr = Math.min(1.5, window.devicePixelRatio || 1);
+    const dpr = 1;
     const w = Math.round(r.width * dpr), h = Math.round(r.height * dpr);
     if (!w || !h) return false;
     if (w !== this.w || h !== this.h) {
@@ -795,7 +874,9 @@ const Demo = {
   frame(ts) {
     this.raf = 0;
     if (!this.active() || !this.resize()) { this.last = 0; return; }
-    const dt = this.last ? Math.min(0.05, (ts - this.last) / 1000) : 1 / 60;
+    if (this.lastDraw && ts - this.lastDraw < 32) { this.kick(); return; }   // 30 fps is plenty for a preview
+    this.lastDraw = ts;
+    const dt = this.last ? Math.min(0.05, (ts - this.last) / 1000) : 1 / 30;
     this.last = ts;
     const still = this.reduce.matches;
     if (!still) this.t += dt;
