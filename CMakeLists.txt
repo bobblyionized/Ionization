@@ -47,6 +47,8 @@ add_executable(Ionization WIN32
   src/gpuload.cpp
   src/memory.cpp
   src/macro.cpp
+  src/shellutil.cpp
+  src/dock.cpp
   "${CMAKE_BINARY_DIR}/app.rc"
   "${UI_RC}"
 )

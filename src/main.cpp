@@ -10,6 +10,7 @@
 #include "gpuload.h"
 #include "memory.h"
 #include "macro.h"
+#include "dock.h"
 #include <shellapi.h>
 #include <shobjidl.h>
 #include <shlwapi.h>
@@ -50,6 +51,8 @@ GameMode g_game;
 GpuLoad g_gpuLoad;
 MemoryOptimizer g_mem;
 MacroEngine g_macros;
+Dock g_dock;
+std::string g_dockApplied;
 ULONGLONG g_lastTrim = 0;
 bool g_revealPending = false, g_raiseCheckPending = false;
 HWINEVENTHOOK g_hookFg = nullptr, g_hookReorder = nullptr;
@@ -70,6 +73,8 @@ Json DefaultSettings() {
                 "size": 100, "opacity": 100, "layer": "top", "corner": "tr", "x": 0, "y": 0},
       "display": {"monitor": 0},
       "app": {"autoUpdate": true, "keepPanelSharp": false, "hotkeys": true, "trayHintShown": false},
+      "dock": {"enabled": false, "mode": "hover", "size": 48, "magnify": 60, "hideTaskbar": true, "showClock": true,
+               "pins": [], "imported": false, "tbHidden": false, "tbOrig": 0},
       "memory": {"lowPriority": false, "autoTrim": false, "autoTrimAt": 85, "gameBoost": true},
       "perf": {"gameMode": true, "quality": "full", "hideClockInGames": true,
                "games": [{"exe": "robloxplayerbeta.exe", "mode": "pause"}, {"exe": "hd-player.exe", "mode": "pause"},
@@ -332,6 +337,47 @@ std::vector<GameRule> GameRulesFrom(const Json& s) {
     return rules;
 }
 
+DockSettings DockFrom(const Json& s) {
+    DockSettings d;
+    d.enabled = s.boolean("dock.enabled", false);
+    d.mode = s.str("dock.mode", "hover");
+    d.size = (float)s.num("dock.size", 48);
+    d.magnify = (float)s.num("dock.magnify", 60);
+    d.hideTaskbar = s.boolean("dock.hideTaskbar", true);
+    d.showClock = s.boolean("dock.showClock", true);
+    d.monitor = (int)s.num("display.monitor", 0);
+    if (const Json* pins = s.path("dock.pins"); pins && pins->isArr())
+        for (auto& p : pins->arr) d.pins.push_back({ Widen(p.str("launch", "")), Widen(p.str("key", "")), Widen(p.str("name", "")) });
+    return d;
+}
+
+Json PinsJson(const std::vector<DockPin>& pins) {
+    Json arr = Json::array();
+    for (auto& p : pins) {
+        Json o = Json::object();
+        o["launch"] = Narrow(p.launch); o["key"] = Narrow(p.key); o["name"] = Narrow(p.name);
+        arr.arr.push_back(o);
+    }
+    return arr;
+}
+
+void ApplyDock() {
+    // First time the dock is turned on: start from the apps pinned to the Windows taskbar.
+    if (g_settings.boolean("dock.enabled", false) && !g_settings.boolean("dock.imported", false)) {
+        g_settings["dock"]["pins"] = PinsJson(Dock::ImportTaskbarPins());
+        g_settings["dock"]["imported"] = true;
+        SaveSoon();
+    }
+    Json key = Json::object();
+    if (const Json* d = g_settings.find("dock")) key["d"] = *d;
+    key["g"] = g_game.Status().inGame;
+    key["m"] = g_settings.num("display.monitor", 0);
+    std::string k = key.dump();
+    if (k == g_dockApplied) return;
+    g_dockApplied = k;
+    g_dock.Apply(DockFrom(g_settings), g_game.Status().inGame);
+}
+
 void ApplyMemory() {
     g_mem.SetLowPriority(g_settings.boolean("memory.lowPriority", false), ForegroundPid());
 }
@@ -359,6 +405,7 @@ void ApplySettings() {
         g_clock.Apply(cs);
     }
     ApplyPanelSharp();
+    ApplyDock();
     UpdateTrayTip();
 }
 
@@ -488,6 +535,9 @@ void Quit() {
     RemoveTrayIcon();
     g_mem.RestoreAll();
     g_macros.StopAll();
+    g_dock.Apply(DockSettings{}, false);   // destroys the dock and gives the taskbar back
+    g_settings["dock"]["tbHidden"] = false;
+    SaveSettingsNow();
     if (g_hookFg) UnhookWinEvent(g_hookFg);
     if (g_hookReorder) UnhookWinEvent(g_hookReorder);
     if (g_ctl) g_ctl->Close();
@@ -631,6 +681,13 @@ void HandleMessage(const Json& m) {
             ApplyMemory();
             SaveSoon();
         }
+        return;
+    }
+    if (type == "dockImport") {
+        g_settings["dock"]["pins"] = PinsJson(Dock::ImportTaskbarPins());
+        g_settings["dock"]["imported"] = true;
+        ApplySettings(); SaveSoon(); SendState();
+        Toast("Pinned apps imported from the taskbar", "ok");
         return;
     }
     if (type == "macros") {
@@ -854,7 +911,7 @@ void OnUpdateStatus(std::string* text) {
 }
 
 LRESULT CALLBACK PanelProc(HWND h, UINT m, WPARAM w, LPARAM l) {
-    if (m == g_taskbarCreated && g_taskbarCreated) { AddTrayIcon(); return 0; }
+    if (m == g_taskbarCreated && g_taskbarCreated) { AddTrayIcon(); g_dock.OnTaskbarCreated(); return 0; }
     switch (m) {
     case WM_NCCALCSIZE:
         if (w) return 0; // client area = whole window (custom title bar in the UI)
@@ -1107,6 +1164,27 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
 
     std::wstring view = ArgValue(argc, argv, L"--view");
     if (!view.empty()) g_startView = Narrow(view);
+    // If a previous run hid the taskbar and never restored it (crash, kill), recover the saved state.
+    if (g_settings.boolean("dock.tbHidden", false)) {
+        Taskbar::SetRecovered(true, (UINT)g_settings.num("dock.tbOrig", ABS_ALWAYSONTOP));
+        if (!g_settings.boolean("dock.enabled", false)) Taskbar::Restore();
+    }
+    // On a crash, hand the taskbar back before the process dies.
+    SetUnhandledExceptionFilter([](EXCEPTION_POINTERS*) -> LONG { Taskbar::Restore(); return EXCEPTION_CONTINUE_SEARCH; });
+    g_dock.onTaskbarStateChanged = [] {
+        bool hidden = Taskbar::IsHidden();
+        if (g_settings.boolean("dock.tbHidden", false) != hidden || (hidden && (UINT)g_settings.num("dock.tbOrig", 0) != Taskbar::OriginalState())) {
+            g_settings["dock"]["tbHidden"] = hidden;
+            g_settings["dock"]["tbOrig"] = (int)Taskbar::OriginalState();
+            SaveSettingsNow();   // immediately, so a crash can still be recovered
+        }
+    };
+    g_dock.onPinsChanged = [](const std::vector<DockPin>& pins) {
+        g_settings["dock"]["pins"] = PinsJson(pins);
+        g_dockApplied.clear();
+        SaveSoon();
+        SendState();
+    };
     g_taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
     AddTrayIcon();
     ApplyHotkeys();

@@ -18,6 +18,7 @@ const DEFAULTS = {
   app: { autoUpdate: true, keepPanelSharp: false, hotkeys: true, trayHintShown: false },
   perf: { gameMode: true, quality: "full", hideClockInGames: true, games: [] },
   memory: { lowPriority: false, autoTrim: false, autoTrimAt: 85, gameBoost: true },
+  dock: { enabled: false, mode: "hover", size: 48, magnify: 60, hideTaskbar: true, showClock: true, pins: [], imported: false },
   profiles: [],
   activeProfile: "Clean",
 };
@@ -680,6 +681,53 @@ function addGame(exe) {
   toast(`${gameName(exe)} added to Game Mode`, "ok");
 }
 
+// ------------------------------------------------------------------ dock
+function renderDock() {
+  const D = state.settings.dock;
+  if (!$("#dockBar")) return;
+  setSeg($("#dockModeSeg"), "v", D.mode);
+  $("#dockModeTag").textContent = D.mode === "always" ? "ALWAYS SHOWN" : "SHOWS ON HOVER";
+  $("[data-pip=dock]").classList.toggle("on", !!D.enabled);
+  const sz = Math.round(clamp(D.size, 32, 80) * 0.8);
+  const bar = $("#dockBar");
+  bar.style.setProperty("--s", sz + "px");
+  const pins = D.pins || [];
+  const tile = (label, cls, run) => `<div class="dk ${cls}" title="${escapeHtml(label)}">${escapeHtml(label.slice(0, 1).toUpperCase())}${run ? `<i class="run${run === 2 ? " on" : ""}"></i>` : ""}</div>`;
+  const now = new Date();
+  const hm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  bar.innerHTML = `<div class="dk" title="Start">${svgUse("i-profiles", 18)}</div>` +
+    (pins.length ? pins.slice(0, 9).map((p, i) => tile(p.name || "App", "app", i === 0 ? 2 : i < 3 ? 1 : 0)).join("") : tile("Apps", "app", 1)) +
+    `<i class="dk-sep"></i>` +
+    (D.showClock ? `<div class="dk-clock">${hm}<small>${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][now.getDay()]} ${now.getDate()}</small></div>` : "") +
+    `<div class="dk" title="Quick settings">${svgUse("i-display", 16)}</div>`;
+  // magnify the preview on hover, like the real dock
+  const tiles = $$(".dk", bar);
+  bar.onmousemove = (e) => tiles.forEach((t) => {
+    const r = t.getBoundingClientRect(), d = (e.clientX - (r.left + r.width / 2)) / (sz * 1.6);
+    const sc = 1 + (D.magnify / 100) * Math.exp(-d * d);
+    t.style.width = t.style.height = sz * sc + "px";
+  });
+  bar.onmouseleave = () => tiles.forEach((t) => (t.style.width = t.style.height = ""));
+  const list = $("#pinList");
+  list.innerHTML = "";
+  if (!pins.length) list.innerHTML = `<li><p class="note" style="margin:0">No pinned apps yet. Import them from the taskbar, or right-click an open app in the dock.</p></li>`;
+  pins.forEach((p, i) => {
+    const li = document.createElement("li");
+    li.innerHTML = `<div style="min-width:0"><p class="t" style="margin:0">${escapeHtml(p.name || "App")}</p><p class="s" style="margin:2px 0 0;overflow:hidden;text-overflow:ellipsis;max-width:420px">${escapeHtml(p.launch)}</p></div>
+      <div class="r" style="display:flex;gap:4px;grid-auto-flow:column">
+        <button class="btn ghost sm" data-move="-1" ${i === 0 ? "disabled" : ""}>Up</button>
+        <button class="btn ghost sm" data-move="1" ${i === pins.length - 1 ? "disabled" : ""}>Down</button>
+        <button class="btn ghost sm" data-unpin>Unpin</button></div>`;
+    $$("[data-move]", li).forEach((b) => b.addEventListener("click", () => {
+      const j = i + Number(b.dataset.move);
+      [pins[i], pins[j]] = [pins[j], pins[i]];
+      pushSettings(); renderDock();
+    }));
+    $("[data-unpin]", li).addEventListener("click", () => { pins.splice(i, 1); pushSettings(); renderDock(); });
+    list.appendChild(li);
+  });
+}
+
 // ------------------------------------------------------------------ memory
 const GB = 1024 * 1024 * 1024;
 function fmtBytes(b) { return b >= GB ? (b / GB).toFixed(1) + " GB" : Math.round(b / 1048576) + " MB"; }
@@ -749,6 +797,7 @@ function refreshFor(section) {
   if (section === "clock") renderClock();
   if (section === "app") renderShortcuts();
   if (section === "perf") renderPerf();
+  if (section === "dock") renderDock();
 }
 function renderAll() {
   syncBinds();
@@ -762,6 +811,7 @@ function renderAll() {
   renderMonitors();
   renderUpdate();
   renderPerf();
+  renderDock();
   renderVisualsGate();
   schedulePreviews();
   $$(".seg").forEach(placeIndicator);
@@ -807,6 +857,10 @@ function build() {
     { path: "fx.warmth", label: "Night warmth", min: 0, max: 100, step: 1, unit: "%", def: 0, hint: "cuts blue light" },
   ]);
   rows("#memRows", [{ path: "memory.autoTrimAt", label: "Free up at", min: 60, max: 95, step: 1, unit: "%", def: 85, hint: "RAM in use" }]);
+  rows("#dockRows", [
+    { path: "dock.size", label: "Icon size", min: 32, max: 80, step: 1, unit: "px", def: 48 },
+    { path: "dock.magnify", label: "Magnification", min: 0, max: 100, step: 1, unit: "%", def: 60, hint: "on hover" },
+  ]);
   rows("#clockRows", [
     { path: "clock.size", label: "Size", min: 50, max: 200, step: 1, unit: "%", def: 100 },
     { path: "clock.opacity", label: "Opacity", min: 10, max: 100, step: 1, unit: "%", def: 100 },
@@ -817,6 +871,7 @@ function build() {
   $("#compareToggle").addEventListener("change", drawChart);
   $("#cmdBlur").addEventListener("click", () => set("blur.enabled", !get("blur.enabled")));
   $$("#qualitySeg button").forEach((b) => b.addEventListener("click", () => set("perf.quality", b.dataset.v)));
+  $$("#dockModeSeg button").forEach((b) => b.addEventListener("click", () => set("dock.mode", b.dataset.v)));
   $("#addGameForm").addEventListener("submit", (e) => { e.preventDefault(); addGame($("#addGameExe").value); $("#addGameExe").value = ""; });
   $("#addLastGame").addEventListener("click", () => addGame(state.game.lastExe));
   $("#memTrimBtn").addEventListener("click", () => { $("#memTrimBtn").disabled = true; send("memTrim"); setTimeout(() => ($("#memTrimBtn").disabled = false), 1500); });
@@ -1058,6 +1113,10 @@ const Mock = {
       onHost({ type: "mem", value: { total, available: avail, commit: 9.4 * GB, commitLimit: 12.6 * GB, load: Math.round((1 - avail / total) * 100),
         top: [["claude.exe", 1.2, 9], ["robloxplayerbeta.exe", 0.95, 1], ["msedgewebview2.exe", 0.35, 12], ["discord.exe", 0.31, 6], ["explorer.exe", 0.18, 1], ["searchhost.exe", 0.12, 1]]
           .map(([exe, g, n]) => ({ exe, ws: g * GB, n })) } });
+    } else if (m.type === "dockImport") {
+      state.settings.dock.pins = [{ name: "File Explorer", launch: "C:\\...\\File Explorer.lnk" }, { name: "Google Chrome", launch: "C:\\...\\Google Chrome.lnk" },
+        { name: "Discord", launch: "C:\\...\\Discord.lnk" }, { name: "Spotify", launch: "C:\\...\\Spotify.lnk" }];
+      renderDock();
     } else if (m.type === "macroRecord") {
       if (m.start) onHost({ type: "macroStatus", value: { recording: true, events: 42, playing: [] } });
       else { onHost({ type: "macroStatus", value: { recording: false, events: 0, playing: [] } });

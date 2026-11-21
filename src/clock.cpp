@@ -18,7 +18,9 @@ D2D1_COLOR_F Hex(UINT rgb, float a = 1.0f) {
     return D2D1::ColorF(((rgb >> 16) & 0xFF) / 255.0f, ((rgb >> 8) & 0xFF) / 255.0f, (rgb & 0xFF) / 255.0f, a);
 }
 
-// Load the embedded woff2 fonts into a private DirectWrite collection.
+} // namespace
+
+// Load the embedded woff2 fonts into a private DirectWrite collection (shared with the dock).
 ComPtr<IDWriteFontCollection1> LoadEmbeddedFonts(IDWriteFactory5* f) {
     ComPtr<IDWriteInMemoryFontFileLoader> loader;
     if (FAILED(f->CreateInMemoryFontFileLoader(&loader))) return nullptr;
@@ -46,8 +48,6 @@ ComPtr<IDWriteFontCollection1> LoadEmbeddedFonts(IDWriteFactory5* f) {
     if (FAILED(f->CreateFontCollectionFromFontSet(set.Get(), &coll))) return nullptr;
     return coll;
 }
-
-} // namespace
 
 struct ClockOverlay::Impl {
     ComPtr<ID3D11Device> dev;

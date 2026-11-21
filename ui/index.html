@@ -28,6 +28,7 @@
     <symbol id="i-play" viewBox="0 0 16 16" fill="currentColor"><path d="M5 3.4v9.2a.6.6 0 0 0 .9.5l7.3-4.6a.6.6 0 0 0 0-1L5.9 2.9a.6.6 0 0 0-.9.5Z"/></symbol>
     <symbol id="i-stop" viewBox="0 0 16 16" fill="currentColor"><rect x="4" y="4" width="8" height="8" rx="1.6"/></symbol>
     <symbol id="i-rec" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="4.6"/></symbol>
+    <symbol id="i-dock" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1.8" y="9.6" width="12.4" height="4.4" rx="1.6"/><rect x="3.8" y="5.4" width="3" height="3" rx=".8"/><rect x="7.6" y="3" width="4.4" height="4.4" rx="1.1"/></symbol>
     <symbol id="i-about" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="6.1"/><path d="M8 7.2v3.9"/><circle cx="8" cy="4.9" r=".5" fill="currentColor"/></symbol>
     <symbol id="i-min" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M4 8.5h8"/></symbol>
     <symbol id="i-close" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="m4.5 4.5 7 7M11.5 4.5l-7 7"/></symbol>
@@ -76,6 +77,7 @@
         <li><button data-view="luts"><svg class="ico" width="16" height="16"><use href="#i-lut"/></svg>LUTs</button></li>
         <li><button data-view="fx"><svg class="ico" width="16" height="16"><use href="#i-fx"/></svg>Effects</button></li>
         <li class="group">Desktop</li>
+        <li><button data-view="dock"><svg class="ico" width="16" height="16"><use href="#i-dock"/></svg>Dock<i class="pip" data-pip="dock"></i></button></li>
         <li><button data-view="clock"><svg class="ico" width="16" height="16"><use href="#i-clock"/></svg>Clock<i class="pip" data-pip="clock"></i></button></li>
         <li class="group">System</li>
         <li><button data-view="perf"><svg class="ico" width="16" height="16"><use href="#i-perf"/></svg>Performance<i class="pip" data-pip="game"></i></button></li>
@@ -223,6 +225,46 @@
             <div class="card"><div class="card-head"><p class="card-title" style="margin:0">Preview</p><span class="tag dim">approx.</span></div>
               <div class="preview" style="margin-top:12px"><canvas id="fxPreview" width="320" height="200"></canvas><span class="cap">Before</span><span class="cap after">After</span></div></div>
             <div class="card"><p class="card-title" style="margin:0">Film</p><div class="rows" id="filmRows"></div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================== DOCK -->
+      <section class="view" data-view="dock">
+        <div class="viewhead">
+          <div><p class="title" style="margin:0">Dock</p><p class="subtitle" style="margin:2px 0 0">A floating dock that replaces the Windows taskbar</p></div>
+          <label class="switch"><input type="checkbox" data-bind="dock.enabled"><span class="track"><span class="knob"></span></span><span class="lbl">Use the dock</span></label>
+        </div>
+        <div class="grid">
+          <div class="card">
+            <div class="card-head"><p class="card-title" style="margin:0">Preview</p><span class="tag dim" id="dockModeTag">SHOWS ON HOVER</span></div>
+            <div class="dockstage" id="dockStage"><div class="dockbar" id="dockBar"></div></div>
+          </div>
+          <div class="split">
+            <div class="card">
+              <div class="card-head" style="align-items:center"><p class="card-title" style="margin:0">Pinned apps</p>
+                <button class="btn ghost sm" data-action="dockImport"><svg width="14" height="14"><use href="#i-refresh"/></svg>Import from taskbar</button></div>
+              <p class="note" style="margin:6px 0 0">Right-click any app in the dock to pin or unpin it. Open apps appear after the pinned ones.</p>
+              <ul class="list" style="margin-top:12px" id="pinList"></ul>
+            </div>
+            <div class="stack">
+              <div class="card">
+                <p class="card-title" style="margin:0 0 10px">Behavior</p>
+                <div class="opt-row"><div><div class="t">Visibility</div><div class="s">Hover the bottom edge to bring it up, or keep it showing</div></div>
+                  <div class="seg sm" id="dockModeSeg"><button data-v="hover">On hover</button><button data-v="always">Always</button><i class="ind"></i></div></div>
+                <div class="opt-row"><div><div class="t">Hide the Windows taskbar</div><div class="s">Given back when you turn the dock off or quit</div></div>
+                  <label class="switch"><input type="checkbox" data-bind="dock.hideTaskbar"><span class="track"><span class="knob"></span></span></label></div>
+                <div class="opt-row"><div><div class="t">Clock and battery</div><div class="s">Shown at the right end of the dock</div></div>
+                  <label class="switch"><input type="checkbox" data-bind="dock.showClock"><span class="track"><span class="knob"></span></span></label></div>
+                <div class="rows" id="dockRows"></div>
+              </div>
+              <div class="card"><p class="card-title" style="margin:0">Using the dock</p>
+                <ul class="lim">
+                  <li>Click an app to switch to it, click again to minimize. Middle-click opens a new window.</li>
+                  <li>The tray icons button brings back the Windows taskbar until you click it again.</li>
+                  <li>The dock steps aside while a game is running.</li>
+                </ul></div>
+            </div>
           </div>
         </div>
       </section>
