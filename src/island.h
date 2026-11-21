@@ -12,6 +12,7 @@ struct IslandSettings {
     float size = 100;               // %
     bool hidden = false;            // stay out of sight until the cursor touches the top edge
     bool volumeOsd = true;
+    bool alwaysOnTop = false;       // stay in front of everything, even games and snapped windows
     int monitor = 0;
 };
 

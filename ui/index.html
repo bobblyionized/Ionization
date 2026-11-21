@@ -293,6 +293,8 @@
                 <label class="switch"><input type="checkbox" data-bind="island.hidden"><span class="track"><span class="knob"></span></span></label></div>
               <div class="opt-row"><div><div class="t">Volume readout</div><div class="s">Shows the level on the island when you change the volume</div></div>
                 <label class="switch"><input type="checkbox" data-bind="island.volumeOsd"><span class="track"><span class="knob"></span></span></label></div>
+              <div class="opt-row"><div><div class="t">Always in front</div><div class="s">Stays on top of everything, even games and snapped windows. Off, it steps aside while a game is running</div></div>
+                <label class="switch"><input type="checkbox" data-bind="island.alwaysOnTop"><span class="track"><span class="knob"></span></span></label></div>
             </div>
             <div class="stack">
               <div class="card"><p class="card-title" style="margin:0">What it shows</p>
@@ -301,7 +303,7 @@
                   <li>An orange dot while an app is using the microphone, green for the camera.</li>
                   <li>Volume and brightness sliders, a mic mute button, a color picker and a snip button.</li>
                   <li>A focus timer that counts down on the island.</li>
-                  <li>It steps aside while a game is running.</li>
+                  <li>It steps aside while a game is running, unless Always in front is on.</li>
                 </ul></div>
               <div class="card"><p class="card-title" style="margin:0 0 4px">Shortcuts</p>
                 <ul class="list" id="islandKeys"></ul>

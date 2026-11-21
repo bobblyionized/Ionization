@@ -18,7 +18,7 @@ const DEFAULTS = {
   app: { autoUpdate: true, keepPanelSharp: false, hotkeys: true, trayHintShown: false },
   perf: { gameMode: true, quality: "full", hideClockInGames: true, games: [] },
   memory: { lowPriority: false, autoTrim: false, autoTrimAt: 85, gameBoost: true },
-  island: { enabled: false, shape: "island", theme: "black", size: 100, hidden: false, volumeOsd: true },
+  island: { enabled: false, shape: "island", theme: "black", size: 100, hidden: false, volumeOsd: true, alwaysOnTop: false },
   clipboard: { enabled: false, max: 60 },
   desktop: { hideIcons: false, hiddenByUs: false },
   wallpaper: { enabled: false, source: "shader", shader: "aurora", speed: 100, dim: 0, fps: 30, image: "", video: "", pan: true, displays: "all", pauseBattery: true },

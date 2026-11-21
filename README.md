@@ -20,6 +20,7 @@ A visual changer for Windows 11, built around screen-wide, CapCut-style motion b
 - **Island**: a live pill at the top of the screen. It shows now playing (any app that uses Windows media controls) and mic and camera in-use dots. Hover it for a card with play/pause/skip, volume and brightness sliders, mic mute, a color picker, snip and a focus timer. It comes in Island or Notch shape, with Black, Graphite or Glass themes.
   - `Ctrl+Alt+M` mutes the mic, `Ctrl+Alt+N` opens the card and `Ctrl+Alt+P` picks a color.
   - Scripts can post a line with `Ionization.exe --island "Build finished"`.
+  - **Always in front** keeps it on top of everything, even games and snapped windows. Otherwise it steps aside while a game runs.
 - **Clipboard history**: everything you copy (text, links, images, files), kept on the island's Clipboard tab (`Ctrl+Alt+H`) and in the panel. Items can be pinned and copied again with one click.
   - It is saved encrypted with your Windows account.
   - Copies that password managers mark private are skipped.

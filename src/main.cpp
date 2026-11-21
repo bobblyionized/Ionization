@@ -93,7 +93,7 @@ Json DefaultSettings() {
       "app": {"autoUpdate": true, "keepPanelSharp": false, "hotkeys": true, "trayHintShown": false},
       "dock": {"enabled": false, "mode": "hover", "style": "glass", "size": 48, "magnify": 60, "hideTaskbar": true, "showClock": true,
                "pins": [], "imported": false, "tbHidden": false, "tbOrig": 0},
-      "island": {"enabled": false, "shape": "island", "theme": "black", "size": 100, "hidden": false, "volumeOsd": true},
+      "island": {"enabled": false, "shape": "island", "theme": "black", "size": 100, "hidden": false, "volumeOsd": true, "alwaysOnTop": false},
       "clipboard": {"enabled": false, "max": 60},
       "desktop": {"hideIcons": false, "hiddenByUs": false},
       "wallpaper": {"enabled": false, "source": "shader", "shader": "aurora", "speed": 100, "dim": 0, "fps": 30,
@@ -429,6 +429,7 @@ IslandSettings IslandFrom(const Json& s) {
     i.size = (float)s.num("island.size", 100);
     i.hidden = s.boolean("island.hidden", false);
     i.volumeOsd = s.boolean("island.volumeOsd", true);
+    i.alwaysOnTop = s.boolean("island.alwaysOnTop", false);
     i.monitor = (int)s.num("display.monitor", 0);
     return i;
 }
@@ -815,6 +816,7 @@ void RaiseCheck() {
 void CALLBACK WinEventProc(HWINEVENTHOOK, DWORD event, HWND, LONG, LONG, DWORD, DWORD) {
     if (event == EVENT_SYSTEM_FOREGROUND) {
         GameTick();
+        if (g_settings.boolean("island.alwaysOnTop", false)) g_island.Reassert();   // a newly focused app may have raised itself
         if (g_settings.boolean("memory.lowPriority", false)) ApplyMemory();
     }
     if (!g_raiseCheckPending && g_renderer.IsRunning()) {
@@ -1462,7 +1464,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     DwmSetWindowAttribute(g_hwnd, DWMWA_BORDER_COLOR, &border, sizeof(border));
     MARGINS margins{ 0, 0, 0, 1 };
     DwmExtendFrameIntoClientArea(g_hwnd, &margins);
-    SetWindowPos(g_hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+    SetWindowPos(g_hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);   // never steal focus at startup
 
     std::wstring view = ArgValue(argc, argv, L"--view");
     if (!view.empty()) g_startView = Narrow(view);
@@ -1492,6 +1494,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     ApplyHotkeys();
     g_game.Configure(g_settings.boolean("perf.gameMode", true), GameRulesFrom(g_settings));
     g_game.Tick();
+    if (g_game.Status().inGame) LogLine("Game detected at start: %s (%s)", g_game.Status().exe.c_str(), g_game.Status().reason.c_str());
     g_gpuLoad.Open(GetCurrentProcessId());
     ApplySettings();
     if (!islandText.empty()) {

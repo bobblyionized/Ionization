@@ -989,8 +989,31 @@ struct Island::Impl {
         UpdateTargets();
     }
 
+    bool Hidden() const { return inGame && !s.alwaysOnTop; }   // steps aside for games unless told to stay
+
+    // "Always in front": if another always-on-top window has been raised over the pill, go back on top.
+    ULONGLONG lastZ = 0;
+    void KeepInFront(ULONGLONG now) {
+        if (!s.alwaysOnTop || now - lastZ < 400) return;
+        lastZ = now;
+        RECT wr; GetWindowRect(hwnd, &wr);
+        D2D1_RECT_F p = PillRect();
+        RECT pill{ wr.left + (LONG)p.left, wr.top + (LONG)p.top, wr.left + (LONG)p.right, wr.top + (LONG)std::max(p.bottom, p.top + 30 * k) };
+        for (HWND h = GetWindow(hwnd, GW_HWNDPREV); h; h = GetWindow(h, GW_HWNDPREV)) {
+            if (!IsWindowVisible(h) || !(GetWindowLongW(h, GWL_EXSTYLE) & WS_EX_TOPMOST)) continue;
+            wchar_t cls[64] = L""; GetClassNameW(h, cls, 64);
+            if (!wcsncmp(cls, L"IonizationPanel", 15)) continue;     // the panel may be kept on top on purpose
+            RECT r, x;
+            if (GetWindowRect(h, &r) && IntersectRect(&x, &r, &pill)) {
+                SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+                return;
+            }
+        }
+    }
+
     void Poll() {
-        if (!s.enabled || inGame || picker.catcher) return;
+        if (!s.enabled || Hidden() || picker.catcher) return;
+        KeepInFront(GetTickCount64());
         POINT pt; GetCursorPos(&pt);
         RECT wr; GetWindowRect(hwnd, &wr);
         POINT c{ pt.x - wr.left, pt.y - wr.top };
@@ -999,7 +1022,8 @@ struct Island::Impl {
         float m = 8 * k;
         bool over = c.x >= p.left - m && c.x <= p.right + m && c.y >= 0 && c.y <= p.bottom + m;
         // Hidden mode / tiny pill: touching the top edge near the middle also opens it.
-        bool edge = pt.y <= mon.top + 1 && std::abs(pt.x - (mon.left + mon.right) / 2) < (LONG)(160 * k);
+        // (not while a game is in front: flicking the mouse up in a match shouldn't open the card)
+        bool edge = !inGame && pt.y <= mon.top + 1 && std::abs(pt.x - (mon.left + mon.right) / 2) < (LONG)(160 * k);
         bool button = (GetAsyncKeyState(GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON) & 0x8000) != 0;
         if (button && !prevButton) pressOnPill = over || edge;   // a click meant for the app under the pill
         prevButton = button;
@@ -1190,7 +1214,7 @@ struct Island::Impl {
         case WM_TIMER:
             if (wp == T_POLL) Poll();
             else if (wp == T_ANIM) Animate();
-            else if (wp == T_SLOW && !inGame) {
+            else if (wp == T_SLOW && !Hidden()) {
                 Privacy::InUse u = Privacy::Poll();
                 int mm = Audio::MicMuted();
                 if (u.mic != use.mic || u.camera != use.camera || mm != micMuted) { use = u; micMuted = mm; UpdateTargets(); }
@@ -1303,7 +1327,7 @@ void Island::Apply(const IslandSettings& s, bool inGame) {
     if (!I.EnsureDevice()) return;
     I.Create();
     I.Layout();
-    if (inGame) ShowWindow(I.hwnd, SW_HIDE);
+    if (I.Hidden()) ShowWindow(I.hwnd, SW_HIDE);
     else { ShowWindow(I.hwnd, SW_SHOWNOACTIVATE); I.Render(); }
 }
 
