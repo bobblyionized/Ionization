@@ -20,7 +20,7 @@ using namespace Microsoft::WRL;
 
 namespace {
 
-const wchar_t* kPanelClass = L"IonizationPanel";
+const wchar_t* kPanelClass = strstr(IONIZATION_VERSION, "dev") ? L"IonizationPanelDev" : L"IonizationPanel";
 const wchar_t* kHost = L"https://ionization.local/";
 enum { TIMER_STATS = 1, TIMER_SAVE, TIMER_UPDATE, TIMER_ZORDER, TIMER_DUMP, TIMER_EXIT, TIMER_SHOW,
        TIMER_GAME, TIMER_RAISECHECK, TIMER_UNLOAD };
@@ -889,7 +889,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
         if (p) { WaitForSingleObject(p, 10000); CloseHandle(p); }
     }
 
-    HANDLE mutex = CreateMutexW(nullptr, TRUE, L"Local\\IonizationSingleInstance");
+    HANDLE mutex = CreateMutexW(nullptr, TRUE, Updater::IsDevBuild() ? L"Local\\IonizationSingleInstanceDev" : L"Local\\IonizationSingleInstance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         HWND other = FindWindowW(kPanelClass, nullptr);
         if (other) PostMessageW(other, WM_APP_SHOW, 0, 0);

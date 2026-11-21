@@ -31,7 +31,8 @@ static std::wstring KnownDir(REFKNOWNFOLDERID id) {
     std::wstring out;
     if (SUCCEEDED(SHGetKnownFolderPath(id, KF_FLAG_CREATE, nullptr, &p))) out = p;
     CoTaskMemFree(p);
-    out += L"\\Ionization";
+    // Local dev builds keep their own settings and logs, so testing never touches the installed copy.
+    out += strstr(IONIZATION_VERSION, "dev") ? L"\\Ionization-dev" : L"\\Ionization";
     CreateDirectoryW(out.c_str(), nullptr);
     return out;
 }
