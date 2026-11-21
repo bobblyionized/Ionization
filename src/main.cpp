@@ -748,7 +748,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     SetTimer(g_hwnd, TIMER_STATS, 500, nullptr);
     SetTimer(g_hwnd, TIMER_ZORDER, 2000, nullptr);
     SetTimer(g_hwnd, TIMER_UPDATE, 6 * 60 * 60 * 1000, nullptr);
-    if (g_settings.boolean("app.autoUpdate", true) && !Updater::IsDevBuild()) Updater::CheckAsync(g_hwnd, true);
+    // Never check on the launch right after an update (guards against any update loop).
+    if (g_settings.boolean("app.autoUpdate", true) && !Updater::IsDevBuild() && !HasArg(argc, argv, L"--updated"))
+        Updater::CheckAsync(g_hwnd, true);
     if (!g_dumpPath.empty()) {
         std::wstring delay = ArgValue(argc, argv, L"--dump-delay");
         SetTimer(g_hwnd, TIMER_DUMP, delay.empty() ? 2500 : (UINT)_wtoi(delay.c_str()), nullptr);

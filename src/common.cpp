@@ -98,9 +98,13 @@ void LogLine(const char* fmt, ...) {
     OutputDebugStringA("\n");
     std::lock_guard<std::mutex> lk(m);
     static std::wstring path = LocalDataDir() + L"\\ionization.log";
-    static bool truncated = false;
-    FILE* f = _wfopen(path.c_str(), truncated ? L"ab" : L"wb");
-    truncated = true;
+    static bool checked = false;
+    if (!checked) {  // keep history across restarts (useful after updates), cap at ~256 KB
+        checked = true;
+        WIN32_FILE_ATTRIBUTE_DATA fa{};
+        if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fa) && fa.nFileSizeLow > 256 * 1024) DeleteFileW(path.c_str());
+    }
+    FILE* f = _wfopen(path.c_str(), L"ab");
     if (f) {
         SYSTEMTIME st; GetLocalTime(&st);
         fprintf(f, "%02d:%02d:%02d.%03d %s\r\n", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, buf);

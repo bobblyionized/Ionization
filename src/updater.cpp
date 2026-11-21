@@ -123,6 +123,11 @@ void Run(HWND notify, bool install) {
     if (tag.empty() || exeUrl.empty() || shaUrl.empty()) {
         Json j = Status("error"); j["error"] = "Release is missing assets"; Post(notify, j); return;
     }
+    // A version string without three numeric parts is a broken stamp: never self-update from it.
+    if (ParseVersion(IONIZATION_VERSION).size() < 3) {
+        Json j = Status("error"); j["error"] = "This build has no valid version stamp; download the latest release manually";
+        Post(notify, j); return;
+    }
     if (!Newer(tag, IONIZATION_VERSION)) {
         Json j = Status("current"); j["latest"] = tag; Post(notify, j); return;
     }
