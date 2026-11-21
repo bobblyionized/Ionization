@@ -22,6 +22,7 @@ cbuffer P : register(b0) {
     float bloom; float bloomThresh; float sharpen; float chroma;
     float2 texel; float useLut; float aspect;
     float2 srcTexel; float opacity; float shutter;
+    float tapStep; float maxTaps; float jitter; float pad0;   // smooth-blur quality
 };
 Texture2D tCur : register(t0);          // current desktop frame (sRGB values)
 Texture2D tAccPrev : register(t1);      // trail accumulator, sqrt(linear) in 10-bit
@@ -200,10 +201,12 @@ float3 BlurredAt(float2 uv) {
     float2 v = tVec.SampleLevel(sLin, uv, 0).xy * shutter;      // motion over the shutter, in pixels
     float len = length(v);
     if (len < 0.75) return cur;
-    int n = (int)clamp(ceil(len / 1.25), 2, 32);
+    int n = (int)clamp(ceil(len / tapStep), 2, maxTaps);
+    // Fewer taps: shift them per pixel (interleaved gradient noise) so steps turn into fine grain.
+    float j = jitter > 0 ? (frac(52.9829189 * frac(dot(uv / texel, float2(0.06711056, 0.00583715)))) - 0.5) / n : 0;
     float3 acc = 0;
     [loop] for (int k = 0; k < n; k++) {
-        float t = (k + 0.5) / n - 0.5;                            // centred on the pixel, like a camera shutter
+        float t = (k + 0.5) / n - 0.5 + j;                        // centred on the pixel, like a camera shutter
         acc += ToLin(tCur.SampleLevel(sLin, uv - v * t * texel, 0).rgb);
     }
     return lerp(cur, acc / n, opacity);

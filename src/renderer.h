@@ -11,7 +11,9 @@ struct EffectParams {
     int blurMode = 3;            // 1 = trail (EMA), 2 = blend (frame average), 3 = smooth (optical flow)
     float opacity = 100;         // 0..100: blur strength against the sharp frame
     float strength = 45;         // 0..100
-    int quality = 1;             // 0 = efficient (half-res trails), 1 = full
+    int quality = 1;             // 0 = forced efficient (games that keep effects), 1 = follow blurQuality
+    int blurQuality = 2;         // 0 low (half-res trails, 8 taps), 1 medium, 2 high, 3 ultra (64 taps)
+    int fpsCap = 120;            // max overlay frames per second; 0 = as fast as the display refreshes
     bool visualsOn = false;
     float exposure = 0;          // -2..2 EV
     float contrast = 0;          // -100..100

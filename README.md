@@ -6,7 +6,13 @@ A visual changer for Windows 11, built around screen-wide, CapCut-style motion b
 
 ## What it does
 
-- **Motion blur on everything**, with two modes. Trail is an exponential frame trail; Frame blend averages the last N frames for a ghosting look. A slider and a typed value both set the strength, and a toggle turns it on and off.
+- **Motion blur on everything**, in three modes:
+  - Smooth: optical flow, so each pixel smears along its own motion, like CapCut.
+  - Trail: an exponential frame trail.
+  - Frame blend: averages the last N frames for a ghosting look.
+  - A slider and a typed value set the strength.
+  - **Quality** goes from Low to Ultra (8 to 64 samples along the motion).
+  - A **frame rate limit** of 60, 120 (default), 144, 240 or Max sets how often the blur redraws. It can never exceed the display's own refresh rate.
 - **Color**: exposure, contrast, saturation, vibrance, temperature and tint.
 - **LUTs**: nine built-in looks, plus any `.cube` file you import.
 - **Effects**: vignette, film grain, bloom, sharpen, chromatic aberration and night warmth.
@@ -14,6 +20,12 @@ A visual changer for Windows 11, built around screen-wide, CapCut-style motion b
 - **Island**: a live pill at the top of the screen. It shows now playing (any app that uses Windows media controls) and mic and camera in-use dots. Hover it for a card with play/pause/skip, volume and brightness sliders, mic mute, a color picker, snip and a focus timer. It comes in Island or Notch shape, with Black, Graphite or Glass themes.
   - `Ctrl+Alt+M` mutes the mic, `Ctrl+Alt+N` opens the card and `Ctrl+Alt+P` picks a color.
   - Scripts can post a line with `Ionization.exe --island "Build finished"`.
+- **Clipboard history**: everything you copy (text, links, images, files), kept on the island's Clipboard tab (`Ctrl+Alt+H`) and in the panel. Items can be pinned and copied again with one click.
+  - It is saved encrypted with your Windows account.
+  - Copies that password managers mark private are skipped.
+- **Shelf**: drag files onto the island to park them, then drag them back out into any app.
+- **Widgets**: weather (Open-Meteo, no account needed), a world clock, a calendar, a to-do list and live CPU/GPU/RAM/network.
+  - They sit on the desktop or on top, and you can drag each one anywhere.
 - **Dock**: a floating, magnifying dock that replaces the Windows taskbar and gives it back when turned off.
 - **Memory** and **Macros**: background RAM trimming, plus a keyboard and mouse macro recorder and player.
 - **Profiles**: Clean, Cinematic, Dreamy, Retro, Night, and your own saved looks.

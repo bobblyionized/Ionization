@@ -29,6 +29,14 @@
     <symbol id="i-stop" viewBox="0 0 16 16" fill="currentColor"><rect x="4" y="4" width="8" height="8" rx="1.6"/></symbol>
     <symbol id="i-rec" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="4.6"/></symbol>
     <symbol id="i-island" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1.6 1.9h12.8"/><rect x="3" y="4.4" width="10" height="4.4" rx="2.2"/><circle cx="10.6" cy="6.6" r=".55" fill="currentColor" stroke="none"/><path d="M5 12.2h6" opacity=".55"/></symbol>
+    <symbol id="i-clip" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="10" height="11" rx="1.8"/><rect x="5.6" y="1.8" width="4.8" height="2.6" rx=".9"/><path d="M5.6 8h4.8M5.6 10.6h3"/></symbol>
+    <symbol id="i-widgets" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="5.2" height="5.2" rx="1.4"/><rect x="8.8" y="2" width="5.2" height="5.2" rx="1.4"/><rect x="2" y="8.8" width="5.2" height="5.2" rx="1.4"/><circle cx="11.4" cy="11.4" r="2.6"/></symbol>
+    <symbol id="i-text" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 4.5h10M3 8h10M3 11.5h6"/></symbol>
+    <symbol id="i-link" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 9a2.6 2.6 0 0 0 3.7 0l2.1-2.1a2.6 2.6 0 0 0-3.7-3.7l-.8.8"/><path d="M9 7a2.6 2.6 0 0 0-3.7 0L3.2 9.1a2.6 2.6 0 0 0 3.7 3.7l.8-.8"/></symbol>
+    <symbol id="i-file" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M4 1.8h5.2L12.4 5v9.2H4z"/><path d="M9 1.8V5h3.4"/></symbol>
+    <symbol id="i-image" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.6"/><path d="m2.6 11.4 3.4-3.4 2.6 2.6 1.6-1.6 3.2 3.2"/><circle cx="10.6" cy="6.2" r="1" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h4v4l2 2.6H4L6 6z"/><path d="M8 8.6V14"/></symbol>
+    <symbol id="i-search" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="7" cy="7" r="4.4"/><path d="m10.4 10.4 3.2 3.2"/></symbol>
     <symbol id="i-dock" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1.8" y="9.6" width="12.4" height="4.4" rx="1.6"/><rect x="3.8" y="5.4" width="3" height="3" rx=".8"/><rect x="7.6" y="3" width="4.4" height="4.4" rx="1.1"/></symbol>
     <symbol id="i-about" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="6.1"/><path d="M8 7.2v3.9"/><circle cx="8" cy="4.9" r=".5" fill="currentColor"/></symbol>
     <symbol id="i-min" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M4 8.5h8"/></symbol>
@@ -79,11 +87,13 @@
         <li><button data-view="fx"><svg class="ico" width="16" height="16"><use href="#i-fx"/></svg>Effects</button></li>
         <li class="group">Desktop</li>
         <li><button data-view="island"><svg class="ico" width="16" height="16"><use href="#i-island"/></svg>Island<i class="pip" data-pip="island"></i></button></li>
+        <li><button data-view="widgets"><svg class="ico" width="16" height="16"><use href="#i-widgets"/></svg>Widgets<i class="pip" data-pip="widgets"></i></button></li>
         <li><button data-view="dock"><svg class="ico" width="16" height="16"><use href="#i-dock"/></svg>Dock<i class="pip" data-pip="dock"></i></button></li>
         <li><button data-view="clock"><svg class="ico" width="16" height="16"><use href="#i-clock"/></svg>Clock<i class="pip" data-pip="clock"></i></button></li>
         <li class="group">System</li>
         <li><button data-view="perf"><svg class="ico" width="16" height="16"><use href="#i-perf"/></svg>Performance<i class="pip" data-pip="game"></i></button></li>
         <li><button data-view="memory"><svg class="ico" width="16" height="16"><use href="#i-memory"/></svg>Memory<i class="pip" data-pip="memory"></i></button></li>
+        <li><button data-view="clipboard"><svg class="ico" width="16" height="16"><use href="#i-clip"/></svg>Clipboard<i class="pip" data-pip="clipboard"></i></button></li>
         <li><button data-view="macros"><svg class="ico" width="16" height="16"><use href="#i-macro"/></svg>Macros<i class="pip" data-pip="macro"></i></button></li>
         <li class="group">App</li>
         <li><button data-view="profiles"><svg class="ico" width="16" height="16"><use href="#i-profiles"/></svg>Profiles</button></li>
@@ -151,6 +161,13 @@
             </div>
 
             <div class="stack">
+              <div class="card">
+                <p class="card-title" style="margin:0">Quality and frame rate</p>
+                <div class="qrow"><div class="t">Blur quality</div><div class="s" id="bqHint"></div>
+                  <div class="seg sm fill" id="blurQualitySeg"><button data-v="low">Low</button><button data-v="medium">Medium</button><button data-v="high">High</button><button data-v="ultra">Ultra</button><i class="ind"></i></div></div>
+                <div class="qrow"><div class="t">Frame rate limit</div><div class="s" id="fpsHint"></div>
+                  <div class="seg sm fill" id="fpsSeg"><button data-v="60">60</button><button data-v="120">120</button><button data-v="144">144</button><button data-v="240">240</button><button data-v="0">Max</button><i class="ind"></i></div></div>
+              </div>
               <div class="card">
                 <p class="card-title" style="margin:0 0 0">Live pipeline</p>
                 <div class="bars" id="liveBars">
@@ -292,6 +309,70 @@
         </div>
       </section>
 
+      <!-- ============================== WIDGETS -->
+      <section class="view" data-view="widgets">
+        <div class="viewhead">
+          <div><p class="title" style="margin:0">Widgets</p><p class="subtitle" style="margin:2px 0 0">Weather, world clocks, a to-do list, a calendar and system stats on your desktop</p></div>
+          <button class="btn ghost sm" data-action="widgetsResetPos"><svg width="14" height="14"><use href="#i-refresh"/></svg>Reset positions</button>
+        </div>
+        <div class="grid">
+          <div class="wgrid" id="widgetCards"></div>
+          <div class="split">
+            <div class="stack">
+              <div class="card">
+                <div class="card-head" style="align-items:center"><p class="card-title" style="margin:0">Weather</p>
+                  <div style="display:flex;gap:8px;align-items:center"><div class="seg sm" id="unitsSeg"><button data-v="c">&deg;C</button><button data-v="f">&deg;F</button><i class="ind"></i></div>
+                  <button class="btn ghost sm" data-action="widgetsRefresh"><svg width="14" height="14"><use href="#i-refresh"/></svg>Refresh</button></div></div>
+                <p class="note" style="margin:8px 0 0" id="weatherPlace">No place set</p>
+                <form class="addrow" id="weatherSearch" style="margin-top:10px">
+                  <input class="field" id="weatherQ" placeholder="Search a city" autocomplete="off" spellcheck="false">
+                  <button class="btn sm" type="submit" style="height:32px"><svg width="14" height="14"><use href="#i-search"/></svg>Search</button>
+                </form>
+                <ul class="list georesults" id="weatherResults"></ul>
+              </div>
+              <div class="card">
+                <div class="card-head" style="align-items:center"><p class="card-title" style="margin:0">World clock</p><span class="tag dim" id="zoneCount">0 OF 6</span></div>
+                <ul class="list" style="margin-top:10px" id="zoneList"></ul>
+                <form class="addrow" id="zoneSearch" style="margin-top:12px">
+                  <input class="field" id="zoneQ" placeholder="Add a city" autocomplete="off" spellcheck="false">
+                  <button class="btn sm" type="submit" style="height:32px"><svg width="14" height="14"><use href="#i-search"/></svg>Search</button>
+                </form>
+                <ul class="list georesults" id="zoneResults"></ul>
+              </div>
+              <div class="card">
+                <div class="card-head" style="align-items:center"><p class="card-title" style="margin:0">To-do</p>
+                  <button class="btn ghost sm" id="todoClearDone">Clear done</button></div>
+                <form class="addrow" id="todoForm" style="margin-top:10px">
+                  <input class="field" id="todoText" placeholder="Add a task" maxlength="120" autocomplete="off">
+                  <button class="btn sm" type="submit" style="height:32px"><svg width="14" height="14"><use href="#i-plus"/></svg>Add</button>
+                </form>
+                <ul class="list" style="margin-top:10px" id="todoList"></ul>
+              </div>
+            </div>
+            <div class="stack">
+              <div class="card">
+                <p class="card-title" style="margin:0 0 10px">Look</p>
+                <div class="opt-row"><div><div class="t">Layer</div><div class="s">On the desktop sits behind your windows, like the wallpaper</div></div>
+                  <div class="seg sm" id="widgetLayerSeg"><button data-v="desktop">Desktop</button><button data-v="top">On top</button><i class="ind"></i></div></div>
+                <div class="opt-row"><div><div class="t">Style</div><div class="s">Glass lets the wallpaper show through</div></div>
+                  <div class="seg sm" id="widgetThemeSeg"><button data-v="glass">Glass</button><button data-v="solid">Solid</button><i class="ind"></i></div></div>
+                <div class="opt-row"><div><div class="t">24-hour time</div><div class="s">World clock and forecast hours</div></div>
+                  <label class="switch"><input type="checkbox" data-bind="widgets.hour24"><span class="track"><span class="knob"></span></span></label></div>
+                <div class="rows" id="widgetRows"></div>
+              </div>
+              <div class="card"><p class="card-title" style="margin:0">Using widgets</p>
+                <ul class="lim">
+                  <li>Drag a widget anywhere to move it. It remembers the spot.</li>
+                  <li>Right-click a widget for settings, a weather refresh, or to hide it.</li>
+                  <li>Click a task on the to-do widget to check it off.</li>
+                  <li>Widgets step aside while a game is running.</li>
+                  <li>Weather and place search use Open-Meteo: free, no account. Only the place you pick is sent.</li>
+                </ul></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- ============================== DOCK -->
       <section class="view" data-view="dock">
         <div class="viewhead">
@@ -406,8 +487,8 @@
             <div class="stack">
               <div class="card">
                 <p class="card-title" style="margin:0 0 10px">Rendering</p>
-                <div class="opt-row"><div><div class="t">Trail quality</div><div class="s">For Trail and Frame blend. Efficient renders trails at half resolution and can leave faint edges</div></div>
-                  <div class="seg sm" id="qualitySeg"><button data-v="efficient">Efficient</button><button data-v="full">Full</button><i class="ind"></i></div></div>
+                <div class="opt-row"><div><div class="t">Blur quality</div><div class="s">Also on the Motion Blur page. Low renders trails at half resolution and uses fewer Smooth samples</div></div>
+                  <div class="seg sm" id="qualitySeg"><button data-v="low">Low</button><button data-v="medium">Med</button><button data-v="high">High</button><button data-v="ultra">Ultra</button><i class="ind"></i></div></div>
                 <div class="opt-row"><div><div class="t">Hide clock in games</div><div class="s">Anything drawn over a game makes Windows composite it</div></div>
                   <label class="switch"><input type="checkbox" data-bind="perf.hideClockInGames"><span class="track"><span class="knob"></span></span></label></div>
               </div>
@@ -471,6 +552,38 @@
       </section>
 
       <!-- ============================== MACROS -->
+      <!-- ============================== CLIPBOARD -->
+      <section class="view" data-view="clipboard">
+        <div class="viewhead">
+          <div><p class="title" style="margin:0">Clipboard</p><p class="subtitle" style="margin:2px 0 0">Everything you copy, kept for later, here and on the island</p></div>
+          <label class="switch"><input type="checkbox" data-bind="clipboard.enabled"><span class="track"><span class="knob"></span></span><span class="lbl">Keep history</span></label>
+        </div>
+        <div class="grid">
+          <div class="split">
+            <div class="card">
+              <div class="card-head" style="align-items:center"><p class="card-title" style="margin:0">Recent</p>
+                <div style="display:flex;gap:8px;align-items:center">
+                  <div class="seg sm" id="clipFilterSeg"><button data-v="all">All</button><button data-v="text">Text</button><button data-v="link">Links</button><button data-v="image">Images</button><button data-v="files">Files</button><button data-v="pinned">Pinned</button><i class="ind"></i></div>
+                  <button class="btn ghost sm" id="clipClearBtn">Clear</button></div></div>
+              <ul class="list cliplist" id="clipList"></ul>
+            </div>
+            <div class="stack">
+              <div class="card"><p class="card-title" style="margin:0 0 4px">History</p><div class="rows" id="clipRows"></div>
+                <p class="note" style="margin:8px 0 0">Pinned items don't count toward the limit and survive Clear.</p></div>
+              <div class="card"><p class="card-title" style="margin:0">Privacy</p>
+                <ul class="lim">
+                  <li>Saved encrypted with your Windows account, so other accounts on this PC can't read it.</li>
+                  <li>Copies that password managers mark as private are never saved.</li>
+                  <li>Windows' own clipboard history (Win+V) keeps working as before.</li>
+                </ul></div>
+              <div class="card"><p class="card-title" style="margin:0 0 4px">On the island</p>
+                <ul class="list" id="clipKeys"></ul>
+                <p class="note" style="margin:10px 0 0">Click an item to copy it again, then paste with Ctrl+V. Drag files onto the island to park them on its Shelf.</p></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section class="view" data-view="macros">
         <div class="viewhead">
           <div><p class="title" style="margin:0">Macros</p><p class="subtitle" style="margin:2px 0 0">Record keyboard and mouse once, replay it on any key or mouse button</p></div>

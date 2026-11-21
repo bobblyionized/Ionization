@@ -12,6 +12,10 @@
 #include "macro.h"
 #include "dock.h"
 #include "island.h"
+#include "clipboard.h"
+#include "widgets.h"
+#include "net.h"
+#include <thread>
 #include <shellapi.h>
 #include <shobjidl.h>
 #include <shlwapi.h>
@@ -28,7 +32,7 @@ const wchar_t* kPanelClass = strstr(IONIZATION_VERSION, "dev") ? L"IonizationPan
 const wchar_t* kHost = L"https://ionization.local/";
 enum { TIMER_STATS = 1, TIMER_SAVE, TIMER_UPDATE, TIMER_ZORDER, TIMER_DUMP, TIMER_EXIT, TIMER_SHOW,
        TIMER_GAME, TIMER_RAISECHECK, TIMER_UNLOAD, TIMER_MEM, TIMER_MACRO, TIMER_RECTEST };
-enum { HK_BLUR = 1, HK_VISUALS, HK_CLOCK, HK_MIC, HK_CARD, HK_PICK };
+enum { HK_BLUR = 1, HK_VISUALS, HK_CLOCK, HK_MIC, HK_CARD, HK_PICK, HK_CLIP };
 const ULONG_PTR kCopyIsland = 0x49534C44;   // WM_COPYDATA tag for `Ionization.exe --island "text"`
 enum { IDM_SHOW = 100, IDM_BLUR, IDM_VISUALS, IDM_CLOCK, IDM_ADDGAME, IDM_QUIT };
 #define WM_APP_SHOW (WM_APP + 10)
@@ -43,7 +47,7 @@ ComPtr<ICoreWebView2Environment> g_env;
 ComPtr<ICoreWebView2Controller> g_ctl;
 ComPtr<ICoreWebView2> g_wv;
 bool g_startHidden = false, g_navigated = false, g_quitting = false;
-bool g_hotkeysOk[8] = {};
+bool g_hotkeysOk[10] = {};
 Json g_lastUpdate;
 std::wstring g_dumpPath;
 UINT g_taskbarCreated = 0;
@@ -58,6 +62,10 @@ std::string g_dockApplied;
 Island g_island;
 std::string g_islandApplied;
 bool g_islandHotkeys = false;
+ClipboardHistory g_clip;
+bool g_clipWatch = false;          // the panel's Clipboard page is open
+Widgets g_widgets;
+std::string g_widgetsApplied;
 ULONGLONG g_lastTrim = 0;
 bool g_revealPending = false, g_raiseCheckPending = false;
 HWINEVENTHOOK g_hookFg = nullptr, g_hookReorder = nullptr;
@@ -69,7 +77,7 @@ DWORD ForegroundPid();
 
 Json DefaultSettings() {
     return Json::parse(R"({
-      "blur": {"enabled": true, "mode": "smooth", "strength": 45, "opacity": 100},
+      "blur": {"enabled": true, "mode": "smooth", "strength": 45, "opacity": 100, "quality": "high", "fps": 120},
       "visuals": {"enabled": true},
       "color": {"exposure": 0, "contrast": 0, "saturation": 100, "vibrance": 0, "temperature": 0, "tint": 0},
       "lut": {"id": "neutral", "intensity": 100},
@@ -81,6 +89,14 @@ Json DefaultSettings() {
       "dock": {"enabled": false, "mode": "hover", "size": 48, "magnify": 60, "hideTaskbar": true, "showClock": true,
                "pins": [], "imported": false, "tbHidden": false, "tbOrig": 0},
       "island": {"enabled": false, "shape": "island", "theme": "black", "size": 100, "hidden": false, "volumeOsd": true},
+      "clipboard": {"enabled": false, "max": 60},
+      "widgets": {"layer": "desktop", "theme": "glass", "units": "c", "hour24": true, "size": 100,
+                  "weather": {"on": false, "x": -1, "y": -1, "place": "", "lat": 0, "lon": 0},
+                  "clocks": {"on": false, "x": -1, "y": -1, "zones": [{"name": "London", "tz": "Europe/London"},
+                             {"name": "New York", "tz": "America/New_York"}, {"name": "Tokyo", "tz": "Asia/Tokyo"}]},
+                  "calendar": {"on": false, "x": -1, "y": -1},
+                  "todo": {"on": false, "x": -1, "y": -1, "items": []},
+                  "stats": {"on": false, "x": -1, "y": -1}},
       "memory": {"lowPriority": false, "autoTrim": false, "autoTrimAt": 85, "gameBoost": true},
       "perf": {"gameMode": true, "quality": "full", "hideClockInGames": true,
                "games": [{"exe": "robloxplayerbeta.exe", "mode": "pause"}, {"exe": "hd-player.exe", "mode": "pause"},
@@ -143,7 +159,9 @@ EffectParams ParamsFrom(const Json& s) {
     p.blurMode = mode == "blend" ? 2 : mode == "trail" ? 1 : 3;
     p.opacity = (float)s.num("blur.opacity", 100);
     p.strength = (float)s.num("blur.strength", 45);
-    p.quality = s.str("perf.quality", "full") == "efficient" ? 0 : 1;
+    std::string q = s.str("blur.quality", "high");
+    p.blurQuality = q == "low" ? 0 : q == "medium" ? 1 : q == "ultra" ? 3 : 2;
+    p.fpsCap = (int)s.num("blur.fps", 120);
     p.visualsOn = s.boolean("visuals.enabled", true);
     p.exposure = (float)s.num("color.exposure", 0);
     p.contrast = (float)s.num("color.contrast", 0);
@@ -240,6 +258,7 @@ Json HotkeysJson() {
     h["mic"] = g_hotkeysOk[HK_MIC];
     h["card"] = g_hotkeysOk[HK_CARD];
     h["pick"] = g_hotkeysOk[HK_PICK];
+    h["clip"] = g_hotkeysOk[HK_CLIP];
     return h;
 }
 
@@ -404,11 +423,34 @@ void ApplyIslandHotkeys() {
     bool want = g_settings.boolean("island.enabled", false) && g_settings.boolean("app.hotkeys", true);
     if (want == g_islandHotkeys) return;
     g_islandHotkeys = want;
-    for (int id : { HK_MIC, HK_CARD, HK_PICK }) { UnregisterHotKey(g_hwnd, id); g_hotkeysOk[id] = false; }
+    for (int id : { HK_MIC, HK_CARD, HK_PICK, HK_CLIP }) { UnregisterHotKey(g_hwnd, id); g_hotkeysOk[id] = false; }
     if (!want) return;
     g_hotkeysOk[HK_MIC] = RegisterHotKey(g_hwnd, HK_MIC, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'M') != 0;
     g_hotkeysOk[HK_CARD] = RegisterHotKey(g_hwnd, HK_CARD, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'N') != 0;
     g_hotkeysOk[HK_PICK] = RegisterHotKey(g_hwnd, HK_PICK, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'P') != 0;
+    g_hotkeysOk[HK_CLIP] = RegisterHotKey(g_hwnd, HK_CLIP, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'H') != 0;
+}
+
+void SendClipList() {
+    Json j = Json::object(); j["type"] = "clipList"; j["items"] = g_clip.ListJson(); j["enabled"] = g_clip.Enabled();
+    PostToUI(j);
+}
+
+void ApplyClipboard() {
+    g_clip.Enable(g_settings.boolean("clipboard.enabled", false), (int)g_settings.num("clipboard.max", 60));
+}
+
+void ApplyWidgets() {
+    Json key = Json::object();
+    if (const Json* w = g_settings.find("widgets")) key["w"] = *w;
+    key["g"] = g_game.Status().inGame;
+    key["m"] = g_settings.num("display.monitor", 0);
+    key["c"] = g_settings.boolean("clock.enabled", false) && g_settings.str("clock.corner", "tr") == "tr";
+    key["cs"] = g_settings.num("clock.size", 100);
+    std::string k = key.dump();
+    if (k == g_widgetsApplied) return;
+    g_widgetsApplied = k;
+    g_widgets.Apply(g_settings, g_game.Status().inGame);
 }
 
 void ApplyIsland() {
@@ -452,6 +494,8 @@ void ApplySettings() {
     ApplyPanelSharp();
     ApplyDock();
     ApplyIsland();
+    ApplyClipboard();
+    ApplyWidgets();
     UpdateTrayTip();
 }
 
@@ -514,6 +558,7 @@ void DestroyWebView() {
 
 void HidePanel() {
     g_revealPending = false;
+    g_clipWatch = false;
     ShowWindow(g_hwnd, SW_HIDE);
     if (g_ctl) g_ctl->put_IsVisible(FALSE);
     // Free the browser engine's memory if the panel stays closed for a minute.
@@ -583,6 +628,8 @@ void Quit() {
     g_macros.StopAll();
     g_dock.Apply(DockSettings{}, false);   // destroys the dock and gives the taskbar back
     g_island.Apply(IslandSettings{}, false);
+    g_widgets.Apply(Json::object(), false);
+    g_clip.Enable(false, 60);   // saves the history
     g_settings["dock"]["tbHidden"] = false;
     SaveSettingsNow();
     if (g_hookFg) UnhookWinEvent(g_hookFg);
@@ -728,6 +775,42 @@ void HandleMessage(const Json& m) {
             ApplyMemory();
             SaveSoon();
         }
+        return;
+    }
+    if (type == "clipList") { g_clipWatch = true; SendClipList(); return; }
+    if (type == "clipCopy") { if (g_clip.CopyBack((uint64_t)m.num("id", 0))) Toast("Copied to the clipboard", "ok"); return; }
+    if (type == "clipPin") { g_clip.TogglePin((uint64_t)m.num("id", 0)); return; }
+    if (type == "clipDelete") { g_clip.Remove((uint64_t)m.num("id", 0)); return; }
+    if (type == "clipClear") { g_clip.Clear(); Toast("Clipboard history cleared (pinned items kept)", "ok"); return; }
+    if (type == "widgetsRefresh") { g_widgets.RefreshWeather(); return; }
+    if (type == "widgetsResetPos") {
+        for (const char* t : { "weather", "clocks", "calendar", "todo", "stats" }) { g_settings["widgets"][t]["x"] = -1; g_settings["widgets"][t]["y"] = -1; }
+        ApplySettings(); SaveSoon(); SendState();
+        return;
+    }
+    if (type == "geoSearch") {
+        // Place search for weather and world clocks (Open-Meteo geocoding; only the typed name is sent).
+        std::string q = m.str("q", ""), purpose = m.str("purpose", "");
+        if (q.size() < 2 || q.size() > 80) return;
+        std::thread([q, purpose] {
+            std::string body, err;
+            Json out = Json::object();
+            out["type"] = "geoResults"; out["purpose"] = purpose; out["q"] = q;
+            Json list = Json::array();
+            if (HttpGetText(L"https://geocoding-api.open-meteo.com/v1/search?count=6&language=en&format=json&name=" + UrlEncode(q), body, err)) {
+                Json j = Json::parse(body);
+                if (const Json* r = j.find("results"); r && r->isArr())
+                    for (auto& e : r->arr) {
+                        Json o = Json::object();
+                        o["name"] = e.str("name", ""); o["admin1"] = e.str("admin1", ""); o["country"] = e.str("country", "");
+                        o["lat"] = e.num("latitude", 0); o["lon"] = e.num("longitude", 0); o["tz"] = e.str("timezone", "");
+                        list.arr.push_back(o);
+                    }
+            } else out["error"] = err;
+            out["results"] = list;
+            auto* js = new std::string(out.dump());
+            if (!PostMessageW(g_hwnd, WM_APP_POSTJSON, 0, (LPARAM)js)) delete js;
+        }).detach();
         return;
     }
     if (type == "dockImport") {
@@ -994,6 +1077,7 @@ LRESULT CALLBACK PanelProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         else if (w == HK_MIC) g_island.ToggleMic();
         else if (w == HK_CARD) g_island.ToggleCard();
         else if (w == HK_PICK) g_island.PickColor();
+        else if (w == HK_CLIP) g_island.OpenCard(3);
         return 0;
     case WM_COPYDATA: {
         auto* cd = (COPYDATASTRUCT*)l;
@@ -1036,6 +1120,7 @@ LRESULT CALLBACK PanelProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             // Overlay just re-raised itself: lift the clock and (optionally) the panel above it.
             g_clock.Reassert();
             g_island.Reassert();
+            g_widgets.Reassert();
             if (g_panelTopmost) SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         } else if (w == 1) {
             g_clock.Reassert();
@@ -1043,6 +1128,12 @@ LRESULT CALLBACK PanelProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             ApplyPanelSharp();
         }
         return 0;
+    case WM_APP_POSTJSON: {
+        auto* js = (std::string*)l;
+        PostToUI(Json::parse(*js));
+        delete js;
+        return 0;
+    }
     case WM_APP_UPDATE:
         OnUpdateStatus((std::string*)l);
         return 0;
@@ -1103,6 +1194,7 @@ LRESULT CALLBACK PanelProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             break;
         case TIMER_ZORDER:
             if (!g_renderer.IsRunning()) { g_clock.Reassert(); g_island.Reassert(); }
+            g_widgets.Reassert();
             break;
         case TIMER_UPDATE:
             if (g_settings.boolean("app.autoUpdate", true)) Updater::CheckAsync(h, true);
@@ -1186,6 +1278,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
         LogLine("memtest: after restore %zu tracked", mo.LoweredCount());
         return 0;
     }
+    if (HasArg(argc, argv, L"--clip-selftest") && Updater::IsDevBuild()) {
+        ClipboardHistory c;
+        LogLine("clip selftest: %s", c.SelfTest().dump().c_str());
+        return 0;
+    }
     if (HasArg(argc, argv, L"--macro-selftest")) {
         LogLine("macro selftest: %s", g_macros.SelfTestConvert().dump().c_str());
         return 0;
@@ -1199,6 +1296,27 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     g_renderer.feedbackTest = HasArg(argc, argv, L"--no-exclude");
     g_clock.noExclude = g_renderer.feedbackTest;
     g_island.noExclude = g_renderer.feedbackTest;
+    g_widgets.noExclude = g_renderer.feedbackTest;
+    g_island.SetClipboard(&g_clip);
+    g_clip.onChanged = [] { g_island.ClipboardChanged(); if (g_clipWatch) SendClipList(); };
+    g_widgets.onMoved = [](const std::string& t, int x, int y) {
+        g_settings["widgets"][t]["x"] = x; g_settings["widgets"][t]["y"] = y;
+        ApplyWidgets(); SaveSoon(); SendState();
+    };
+    g_widgets.onTodoToggle = [](int i) {
+        Json& items = g_settings["widgets"]["todo"]["items"];
+        if (items.isArr() && i >= 0 && i < (int)items.arr.size()) items.arr[i]["done"] = !items.arr[i].boolean("done", false);
+        ApplyWidgets(); SaveSoon(); SendState();
+    };
+    g_widgets.onHide = [](const std::string& t) {
+        g_settings["widgets"][t]["on"] = false;
+        ApplySettings(); SaveSoon(); SendState();
+    };
+    g_widgets.onOpenSettings = [] {
+        if (g_wv) { Json j = Json::object(); j["type"] = "showView"; j["view"] = "widgets"; PostToUI(j); }
+        else g_startView = "widgets";
+        ShowPanel();
+    };
     if (!islandText.empty()) g_startHidden = true;   // first launch via --island: stay in the tray
     g_dumpPath = ArgValue(argc, argv, L"--dump-frame");
     std::wstring exitAfter = ArgValue(argc, argv, L"--exit-after");
@@ -1279,6 +1397,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
         SendMessageW(g_hwnd, WM_COPYDATA, 0, (LPARAM)&cd);
     }
     if (std::wstring demo = ArgValue(argc, argv, L"--island-card"); !demo.empty()) g_island.OpenCard(_wtoi(demo.c_str()));   // screenshot tests
+
     // Started in the tray (e.g. at sign-in): don't load the browser engine until the panel opens.
     if (!g_startHidden) ShowPanel();
 

@@ -3,6 +3,13 @@
 #include "media.h"
 #include "audio.h"
 #include "shellutil.h"
+#include "clipboard.h"
+#include "json.h"
+#include <shellapi.h>
+#include <shlobj.h>
+#include <shobjidl.h>
+#include <oleidl.h>
+#include <atomic>
 #include <d3d11.h>
 #include <dxgi1_3.h>
 #include <dcomp.h>
@@ -25,7 +32,8 @@ D2D1_COLOR_F Hex(UINT rgb, float a = 1.0f) {
 }
 enum { T_POLL = 1, T_ANIM = 2, T_SLOW = 3 };
 const UINT WM_MEDIA = WM_APP + 40, WM_VOLUME = WM_APP + 41;
-const float CARD_W = 460, CARD_H = 204;
+const float CARD_W = 480, CARD_H = 204, CARD_H_MAX = 300;
+const float CLIP_ROW = 46;
 
 struct Spring {
     float x = 0, v = 0, target = 0;
@@ -38,8 +46,26 @@ struct Spring {
 };
 
 struct Hit { D2D1_RECT_F r; int id; };
-enum HitId { H_TAB0 = 1, H_TAB1, H_TAB2, H_PREV, H_PLAY, H_NEXT, H_SEEK, H_MIC, H_PICK, H_SNIP, H_VOL, H_BRI,
-             H_T5, H_T15, H_T25, H_T45, H_TSTOP };
+enum HitId { H_PREV = 1, H_PLAY, H_NEXT, H_SEEK, H_MIC, H_PICK, H_SNIP, H_VOL, H_BRI,
+             H_T5, H_T15, H_T25, H_T45, H_TSTOP,
+             H_TAB0 = 100,            // + tab
+             H_CHIP0 = 200,           // + clipboard filter
+             H_SHELFCLEAR = 300,
+             H_CLIPROW = 1000,        // + row * 4 + {0 row, 1 pin, 2 delete}
+             H_SHELF = 5000 };        // + item * 2 + {0 tile, 1 remove}
+const int kTabs = 5;
+
+std::wstring Ago(long long ms) {
+    FILETIME ft; GetSystemTimeAsFileTime(&ft);
+    long long now = (long long)(((((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime) - 116444736000000000ULL) / 10000);
+    long long s = std::max(0LL, (now - ms) / 1000);
+    wchar_t t[32];
+    if (s < 60) return L"now";
+    if (s < 3600) swprintf_s(t, L"%lldm", s / 60);
+    else if (s < 86400) swprintf_s(t, L"%lldh", s / 3600);
+    else swprintf_s(t, L"%lldd", s / 86400);
+    return t;
+}
 
 // ---------------------------------------------------------------- color picker
 struct Picker {
@@ -165,6 +191,21 @@ struct Island::Impl {
     bool briPending = false;
     std::map<uint64_t, ComPtr<IDWriteTextFormat>> fontCache;
     Picker picker;
+    // clipboard tab
+    ClipboardHistory* clip = nullptr;
+    int clipFilter = 0;
+    float clipScroll = 0;
+    std::vector<uint64_t> clipIds;            // ids of the rows drawn last, by row index
+    std::map<uint64_t, ComPtr<ID2D1Bitmap>> thumbs;
+    // shelf tab
+    std::vector<std::wstring> shelf;
+    std::map<std::wstring, ComPtr<ID2D1Bitmap>> icons;
+    int shelfScroll = 0;
+    bool dropHover = false, dragOut = false, oleInit = false;
+    int pressId = 0; POINT pressPt{};
+    int hoverId = 0;
+    ULONGLONG pinnedSince = 0;
+    bool prevButton = false, pressOnPill = false;
 
     int winW = 0, winH = 0;
     float k = 1;
@@ -206,7 +247,7 @@ struct Island::Impl {
         static bool reg = false;
         if (!reg) {
             WNDCLASSW wc{}; wc.lpfnWndProc = Proc; wc.hInstance = GetModuleHandleW(nullptr);
-            wc.lpszClassName = L"IonizationIsland"; wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+            wc.lpszClassName = L"IonizationIsland"; wc.hCursor = LoadCursorW(nullptr, IDC_ARROW); wc.style = CS_DBLCLKS;
             RegisterClassW(&wc); reg = true;
         }
         hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOREDIRECTIONBITMAP,
@@ -235,14 +276,20 @@ struct Island::Impl {
             }
             Message(std::wstring(hex) + L" copied", (GetRValue(c) << 16) | (GetGValue(c) << 8) | GetBValue(c) | 0x1000000u);
         };
+        LoadShelf();
+        RegisterDrop();
         Layout();
         ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     }
+    void RegisterDrop();   // after ShelfDrop
 
     void Destroy() {
         media.Stop();
         Audio::StopWatching();
+        if (hwnd) RevokeDragDrop(hwnd);
+        if (oleInit) { OleUninitialize(); oleInit = false; }
         if (hwnd) { DestroyWindow(hwnd); hwnd = nullptr; }
+        thumbs.clear(); icons.clear();
         bitmap.Reset(); swap.Reset(); visual.Reset(); target.Reset();
         winW = winH = 0;
     }
@@ -258,7 +305,7 @@ struct Island::Impl {
         float nk = dx / 96.0f * std::clamp(s.size, 70.0f, 140.0f) / 100.0f;
         if (nk != k) fontCache.clear();
         k = nk;
-        int ww = (int)std::ceil((CARD_W + 40) * k), hh = (int)std::ceil((CARD_H + 30) * k);
+        int ww = (int)std::ceil((CARD_W + 40) * k), hh = (int)std::ceil((CARD_H_MAX + 30) * k);
         SetWindowPos(hwnd, HWND_TOPMOST, mon.left + ((mon.right - mon.left) - ww) / 2, mon.top, ww, hh, SWP_NOACTIVATE);
         if (ww != winW || hh != winH) {
             bitmap.Reset(); dc->SetTarget(nullptr);
@@ -309,11 +356,13 @@ struct Island::Impl {
     void UpdateTargets(bool snap = false) {
         float pw, ph;
         PillTarget(pw, ph);
-        float tw = expanded ? CARD_W : pw, th = expanded ? CARD_H : ph;
+        float tw = expanded ? CARD_W : pw, th = expanded ? CardH() : ph;
         w.target = tw * k; h.target = th * k;
         if (snap) { w.x = w.target; h.x = h.target; }
         SetTimer(hwnd, T_ANIM, 16, nullptr);
     }
+
+    float CardH() const { return tab == 3 ? CARD_H_MAX : tab == 4 ? 236.0f : CARD_H; }
 
     D2D1_RECT_F PillRect() {
         float top = s.shape == "notch" ? 0 : 8 * k;
@@ -441,7 +490,7 @@ struct Island::Impl {
                 dc->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(p.left + .5f, p.top + .5f, p.right - .5f, p.bottom - .5f), rad, rad), b.Get(), 1.0f);
         }
         dc->PushAxisAlignedClip(p, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-        float cardAlpha = std::clamp((h.x / k - 60) / (CARD_H - 60), 0.0f, 1.0f);
+        float cardAlpha = std::clamp((h.x / k - 60) / (std::min(CardH(), CARD_H) - 60), 0.0f, 1.0f);
         if (cardAlpha > 0.02f) DrawCard(p, b.Get(), cardAlpha);
         if (cardAlpha < 0.6f) DrawPill(p, b.Get(), 1 - cardAlpha / 0.6f, now);
         dc->PopAxisAlignedClip();
@@ -530,19 +579,22 @@ struct Island::Impl {
     }
 
     void DrawCard(D2D1_RECT_F p, ID2D1SolidColorBrush* b, float a) {
-        D2D1_RECT_F c = D2D1::RectF((p.left + p.right) / 2 - CARD_W * k / 2, p.top, (p.left + p.right) / 2 + CARD_W * k / 2, p.top + CARD_H * k);
+        D2D1_RECT_F c = D2D1::RectF((p.left + p.right) / 2 - CARD_W * k / 2, p.top, (p.left + p.right) / 2 + CARD_W * k / 2, p.top + CardH() * k);
         // tabs
-        const wchar_t* names[3] = { L"Now playing", L"Controls", L"Timer" };
+        const wchar_t* names[kTabs] = { L"Now playing", L"Controls", L"Timer", L"Clipboard", L"Shelf" };
+        const float widths[kTabs] = { 92, 72, 52, 76, 50 };
         auto ft = Font(12.5f, DWRITE_FONT_WEIGHT_MEDIUM, false, DWRITE_TEXT_ALIGNMENT_CENTER);
         float x = 16;
-        for (int i = 0; i < 3; ++i) {
-            float tw = i == 0 ? 92.0f : i == 1 ? 72.0f : 52.0f;
+        for (int i = 0; i < kTabs; ++i) {
+            float tw = widths[i];
             D2D1_RECT_F r = R(x, 10, tw, 26, c);
-            if (tab == i) { b->SetColor(Hex(0x1d1f24, a)); dc->FillRoundedRectangle(D2D1::RoundedRect(r, 13 * k, 13 * k), b); }
+            if (tab == i || hoverId == H_TAB0 + i) { b->SetColor(Hex(tab == i ? 0x1d1f24 : 0x15171b, a)); dc->FillRoundedRectangle(D2D1::RoundedRect(r, 13 * k, 13 * k), b); }
             Text(names[i], r, ft.Get(), b, tab == i ? Hex(0xf3f4f6, a) : Hex(0x8c919a, a));
             hits.push_back({ r, H_TAB0 + i });
             x += tw + 4;
         }
+        if (tab == 3) { DrawClipboard(c, b, a); return; }
+        if (tab == 4) { DrawShelf(c, b, a); return; }
         // right side of the tab row: mic state + time
         SYSTEMTIME st; GetLocalTime(&st);
         wchar_t clock[8]; swprintf_s(clock, L"%02d:%02d", st.wHour, st.wMinute);
@@ -617,6 +669,310 @@ struct Island::Impl {
         }
     }
 
+
+    // ---------------------------------------------------------------- clipboard tab
+    void SmallIcon(int which, D2D1_RECT_F r, ID2D1SolidColorBrush* b, D2D1_COLOR_F col, bool filled = false) {
+        float cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2, u = (r.right - r.left) / 24.0f, sw = 1.7f * u;
+        b->SetColor(col);
+        auto line = [&](float x1, float y1, float x2, float y2) { dc->DrawLine(D2D1::Point2F(cx + x1 * u, cy + y1 * u), D2D1::Point2F(cx + x2 * u, cy + y2 * u), b, sw); };
+        switch (which) {
+        case 0: line(-6, -5, 6, -5); line(-6, 0, 6, 0); line(-6, 5, 2, 5); break;                         // text
+        case 1: {                                                                                       // link
+            D2D1_MATRIX_3X2_F old; dc->GetTransform(&old);
+            dc->SetTransform(D2D1::Matrix3x2F::Rotation(-45, D2D1::Point2F(cx, cy)) * old);
+            dc->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(cx - 8.5f * u, cy - 3.2f * u, cx + 0.5f * u, cy + 3.2f * u), 3.2f * u, 3.2f * u), b, sw);
+            dc->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(cx - 0.5f * u, cy - 3.2f * u, cx + 8.5f * u, cy + 3.2f * u), 3.2f * u, 3.2f * u), b, sw);
+            dc->SetTransform(old);
+            break; }
+        case 2: {                                                                                       // file
+            ComPtr<ID2D1PathGeometry> g; d2d->CreatePathGeometry(&g); ComPtr<ID2D1GeometrySink> sk; g->Open(&sk);
+            sk->BeginFigure(D2D1::Point2F(cx - 5 * u, cy - 7 * u), D2D1_FIGURE_BEGIN_HOLLOW);
+            sk->AddLine(D2D1::Point2F(cx + 1.5f * u, cy - 7 * u)); sk->AddLine(D2D1::Point2F(cx + 5 * u, cy - 3.5f * u));
+            sk->AddLine(D2D1::Point2F(cx + 5 * u, cy + 7 * u)); sk->AddLine(D2D1::Point2F(cx - 5 * u, cy + 7 * u));
+            sk->EndFigure(D2D1_FIGURE_END_CLOSED); sk->Close(); dc->DrawGeometry(g.Get(), b, sw);
+            line(1.5f, -7, 1.5f, -3.5f); line(1.5f, -3.5f, 5, -3.5f); break; }
+        case 3: {                                                                                       // pin
+            ComPtr<ID2D1PathGeometry> g; d2d->CreatePathGeometry(&g); ComPtr<ID2D1GeometrySink> sk; g->Open(&sk);
+            sk->BeginFigure(D2D1::Point2F(cx - 3 * u, cy - 7 * u), filled ? D2D1_FIGURE_BEGIN_FILLED : D2D1_FIGURE_BEGIN_HOLLOW);
+            sk->AddLine(D2D1::Point2F(cx + 3 * u, cy - 7 * u)); sk->AddLine(D2D1::Point2F(cx + 3 * u, cy - 2 * u));
+            sk->AddLine(D2D1::Point2F(cx + 5.5f * u, cy + 1.5f * u)); sk->AddLine(D2D1::Point2F(cx - 5.5f * u, cy + 1.5f * u));
+            sk->AddLine(D2D1::Point2F(cx - 3 * u, cy - 2 * u));
+            sk->EndFigure(D2D1_FIGURE_END_CLOSED); sk->Close();
+            if (filled) dc->FillGeometry(g.Get(), b); else dc->DrawGeometry(g.Get(), b, sw);
+            line(0, 1.5f, 0, 8); break; }
+        case 4: line(-5, -5, 5, 5); line(-5, 5, 5, -5); break;                                         // remove
+        case 5: {                                                                                       // tray + arrow
+            line(0, -8, 0, 2); line(-4, -2, 0, 2); line(4, -2, 0, 2);
+            ComPtr<ID2D1PathGeometry> g; d2d->CreatePathGeometry(&g); ComPtr<ID2D1GeometrySink> sk; g->Open(&sk);
+            sk->BeginFigure(D2D1::Point2F(cx - 9 * u, cy + 1 * u), D2D1_FIGURE_BEGIN_HOLLOW);
+            sk->AddLine(D2D1::Point2F(cx - 9 * u, cy + 8 * u)); sk->AddLine(D2D1::Point2F(cx + 9 * u, cy + 8 * u));
+            sk->AddLine(D2D1::Point2F(cx + 9 * u, cy + 1 * u));
+            sk->EndFigure(D2D1_FIGURE_END_OPEN); sk->Close(); dc->DrawGeometry(g.Get(), b, sw); break; }
+        case 6: {                                                                                       // image
+            dc->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(cx - 7 * u, cy - 6 * u, cx + 7 * u, cy + 6 * u), 2 * u, 2 * u), b, sw);
+            line(-7, 4, -2, -1); line(-2, -1, 2, 3); line(1, 2, 3, 0); line(3, 0, 7, 4);
+            dc->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx + 3 * u, cy - 2.5f * u), 1.4f * u, 1.4f * u), b); break; }
+        }
+    }
+
+    bool ClipMatch(const ClipItem& it) const {
+        switch (clipFilter) {
+        case 1: return it.kind == "text";
+        case 2: return it.kind == "link";
+        case 3: return it.kind == "image";
+        case 4: return it.kind == "files";
+        case 5: return it.pinned;
+        }
+        return true;
+    }
+
+    ID2D1Bitmap* Thumb(const ClipItem& it) {
+        if (it.thumb.empty()) return nullptr;
+        if (auto f = thumbs.find(it.id); f != thumbs.end()) return f->second.Get();
+        if (thumbs.size() > 48) thumbs.clear();
+        std::vector<uint8_t> px; int tw = 0, th = 0;
+        ComPtr<ID2D1Bitmap> bmp;
+        if (ImageUtil::DecodePng(it.thumb, (int)(64 * k), px, tw, th))
+            dc->CreateBitmap(D2D1::SizeU(tw, th), px.data(), tw * 4,
+                D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)), &bmp);
+        thumbs[it.id] = bmp;
+        return bmp.Get();
+    }
+
+    void Empty(D2D1_RECT_F c, const wchar_t* title, const wchar_t* sub, ID2D1SolidColorBrush* b, float a, float y = 110) {
+        Text(title, R(16, y, CARD_W - 32, 24, c), Font(15, DWRITE_FONT_WEIGHT_SEMI_BOLD, false, DWRITE_TEXT_ALIGNMENT_CENTER).Get(), b, Hex(0xf3f4f6, a));
+        Text(sub, R(16, y + 26, CARD_W - 32, 20, c), Font(12.5f, DWRITE_FONT_WEIGHT_REGULAR, false, DWRITE_TEXT_ALIGNMENT_CENTER).Get(), b, Hex(0x8c919a, a));
+    }
+
+    void DrawClipboard(D2D1_RECT_F c, ID2D1SolidColorBrush* b, float a) {
+        const wchar_t* chips[6] = { L"All", L"Text", L"Links", L"Images", L"Files", L"Pinned" };
+        auto fc = Font(12, DWRITE_FONT_WEIGHT_MEDIUM, false, DWRITE_TEXT_ALIGNMENT_CENTER);
+        float x = 16;
+        for (int i = 0; i < 6; ++i) {
+            float cw = 24.0f + (float)wcslen(chips[i]) * 6.4f;
+            D2D1_RECT_F r = R(x, 46, cw, 24, c);
+            bool on = clipFilter == i;
+            b->SetColor(on ? Hex(0xd4f53c, a) : Hex(hoverId == H_CHIP0 + i ? 0x24272d : 0x1a1c21, a));
+            dc->FillRoundedRectangle(D2D1::RoundedRect(r, 12 * k, 12 * k), b);
+            Text(chips[i], r, fc.Get(), b, on ? Hex(0x0b0d02, a) : Hex(0xb3b7bf, a));
+            hits.push_back({ r, H_CHIP0 + i });
+            x += cw + 6;
+        }
+        clipIds.clear();
+        if (!clip || (!clip->Enabled() && clip->Items().empty())) {
+            Empty(c, L"Clipboard history is off", L"Turn it on in Ionization, under Clipboard", b, a);
+            return;
+        }
+        std::vector<const ClipItem*> list;
+        for (auto& it : clip->Items()) if (ClipMatch(it)) list.push_back(&it);
+        wchar_t cnt[32]; swprintf_s(cnt, list.size() == 1 ? L"%zu item" : L"%zu items", list.size());
+        Text(cnt, R(CARD_W - 116, 46, 100, 24, c), Font(11, DWRITE_FONT_WEIGHT_REGULAR, true, DWRITE_TEXT_ALIGNMENT_TRAILING).Get(), b, Hex(0x5d626b, a));
+        if (list.empty()) {
+            Empty(c, clipFilter == 5 ? L"Nothing pinned" : L"Nothing here yet",
+                clipFilter == 5 ? L"Pin an item to keep it past the history limit" : L"Copy something and it shows up here", b, a, 140);
+            return;
+        }
+        const float top = 80, bottom = CardH() - 8;
+        float maxScroll = std::max(0.0f, list.size() * CLIP_ROW - (bottom - top));
+        clipScroll = std::clamp(clipScroll, 0.0f, maxScroll);
+        D2D1_RECT_F area = R(6, top, CARD_W - 12, bottom - top, c);
+        dc->PushAxisAlignedClip(area, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        auto f1 = Font(13, DWRITE_FONT_WEIGHT_MEDIUM), f2 = Font(11, DWRITE_FONT_WEIGHT_REGULAR, true);
+        for (size_t i = 0; i < list.size(); ++i) {
+            const ClipItem& it = *list[i];
+            clipIds.push_back(it.id);
+            float y = top + i * CLIP_ROW - clipScroll;
+            if (y + CLIP_ROW < top || y > bottom) continue;
+            int base = H_CLIPROW + (int)i * 4;
+            bool hov = hoverId >= base && hoverId < base + 4;
+            D2D1_RECT_F row = R(10, y + 2, CARD_W - 20, CLIP_ROW - 4, c);
+            if (hov) { b->SetColor(Hex(0x15171b, a)); dc->FillRoundedRectangle(D2D1::RoundedRect(row, 10 * k, 10 * k), b); }
+            D2D1_RECT_F ib = R(18, y + 7, 32, 32, c);
+            ID2D1Bitmap* th = it.kind == "image" ? Thumb(it) : nullptr;
+            b->SetColor(Hex(0x1d1f24, a)); dc->FillRoundedRectangle(D2D1::RoundedRect(ib, 8 * k, 8 * k), b);
+            if (th) {
+                D2D1_SIZE_F sz = th->GetSize();
+                float s2 = std::min((ib.right - ib.left) / sz.width, (ib.bottom - ib.top) / sz.height);
+                float dw2 = sz.width * s2, dh2 = sz.height * s2, cx = (ib.left + ib.right) / 2, cy = (ib.top + ib.bottom) / 2;
+                dc->DrawBitmap(th, D2D1::RectF(cx - dw2 / 2, cy - dh2 / 2, cx + dw2 / 2, cy + dh2 / 2), a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+            } else {
+                int ic = it.kind == "link" ? 1 : it.kind == "files" ? 2 : it.kind == "image" ? 6 : 0;
+                SmallIcon(ic, D2D1::RectF(ib.left + 6 * k, ib.top + 6 * k, ib.right - 6 * k, ib.bottom - 6 * k), b, it.kind == "link" ? Hex(0xd4f53c, a) : Hex(0xb3b7bf, a));
+            }
+            std::wstring l1, l2;
+            if (it.kind == "files") {
+                const wchar_t* nm = it.files.empty() ? L"" : PathFindFileNameW(it.files[0].c_str());
+                l1 = nm;
+                if (it.files.size() > 1) l1 += L"  +" + std::to_wstring(it.files.size() - 1) + L" more";
+                l2 = (it.files.size() == 1 ? L"File" : std::to_wstring(it.files.size()) + L" files");
+            } else if (it.kind == "image") {
+                l1 = L"Image";
+                l2 = std::to_wstring(it.w) + L" x " + std::to_wstring(it.h);
+            } else {
+                l1.reserve(140);
+                bool sp = false;
+                for (wchar_t ch : it.text) {
+                    if (l1.size() >= 140) break;
+                    if (ch == L'\r' || ch == L'\n' || ch == L'\t' || ch == L' ') { if (!l1.empty()) sp = true; continue; }
+                    if (sp) { l1 += L' '; sp = false; }
+                    l1 += ch;
+                }
+                if (it.kind == "link") l2 = L"Link";
+                else { wchar_t t[48]; swprintf_s(t, L"Text, %zu chars", it.text.size()); l2 = t; }
+            }
+            l2 += L"  \u00b7  " + Ago(it.time);
+            float textR = CARD_W - (hov || it.pinned ? 92.0f : 28.0f);
+            Text(l1, R(60, y + 5, textR - 60, 20, c), f1.Get(), b, Hex(0xf3f4f6, a));
+            Text(l2, R(60, y + 24, textR - 60, 16, c), f2.Get(), b, Hex(0x8c919a, a));
+            D2D1_RECT_F pinR = R(CARD_W - 84, y + 9, 28, 28, c), delR = R(CARD_W - 52, y + 9, 28, 28, c);
+            if (hov || it.pinned) {
+                if (hoverId == base + 1) { b->SetColor(Hex(0x24272d, a)); dc->FillRoundedRectangle(D2D1::RoundedRect(pinR, 8 * k, 8 * k), b); }
+                SmallIcon(3, D2D1::RectF(pinR.left + 5 * k, pinR.top + 5 * k, pinR.right - 5 * k, pinR.bottom - 5 * k), b, it.pinned ? Hex(0xd4f53c, a) : Hex(0x8c919a, a), it.pinned);
+            }
+            if (hov) {
+                if (hoverId == base + 2) { b->SetColor(Hex(0x24272d, a)); dc->FillRoundedRectangle(D2D1::RoundedRect(delR, 8 * k, 8 * k), b); }
+                SmallIcon(4, D2D1::RectF(delR.left + 7 * k, delR.top + 7 * k, delR.right - 7 * k, delR.bottom - 7 * k), b, Hex(0x8c919a, a));
+            }
+            if (row.bottom > area.top && row.top < area.bottom) {
+                hits.push_back({ pinR, base + 1 });
+                hits.push_back({ delR, base + 2 });
+                hits.push_back({ D2D1::RectF(row.left, std::max(row.top, area.top), row.right, std::min(row.bottom, area.bottom)), base });
+            }
+        }
+        dc->PopAxisAlignedClip();
+        if (maxScroll > 0) {
+            float trackH = bottom - top, thumbH = std::max(24.0f, trackH * trackH / (list.size() * CLIP_ROW));
+            float ty = top + (trackH - thumbH) * (clipScroll / maxScroll);
+            b->SetColor(Hex(0x2b2e35, a));
+            dc->FillRoundedRectangle(D2D1::RoundedRect(R(CARD_W - 9, ty, 3, thumbH, c), 1.5f * k, 1.5f * k), b);
+        }
+    }
+
+    // ---------------------------------------------------------------- shelf tab
+    void LoadShelf() {
+        shelf.clear();
+        std::string raw;
+        if (!ReadFileBytes(LocalDataDir() + L"\\shelf.json", raw)) return;
+        Json arr = Json::parse(raw);
+        if (arr.isArr()) for (auto& e : arr.arr) if (e.isStr()) {
+            std::wstring pth = Widen(e.s);
+            if (GetFileAttributesW(pth.c_str()) != INVALID_FILE_ATTRIBUTES) shelf.push_back(pth);
+        }
+    }
+    void SaveShelf() {
+        Json arr = Json::array();
+        for (auto& f : shelf) arr.arr.push_back(Json(Narrow(f)));
+        WriteFileBytes(LocalDataDir() + L"\\shelf.json", arr.dump());
+    }
+    void PruneShelf() {
+        size_t n = shelf.size();
+        shelf.erase(std::remove_if(shelf.begin(), shelf.end(), [](const std::wstring& f) { return GetFileAttributesW(f.c_str()) == INVALID_FILE_ATTRIBUTES; }), shelf.end());
+        if (shelf.size() != n) SaveShelf();
+    }
+    void AddShelf(const std::vector<std::wstring>& files) {
+        int added = 0;
+        for (auto& f : files) {
+            if (std::find(shelf.begin(), shelf.end(), f) != shelf.end()) continue;
+            if (shelf.size() >= 60) break;
+            shelf.push_back(f); ++added;
+        }
+        if (added) SaveShelf();
+        LogLine("Island shelf: %d added, %zu total", added, shelf.size());
+    }
+    ID2D1Bitmap* ShelfIcon(const std::wstring& path) {
+        if (auto f = icons.find(path); f != icons.end()) return f->second.Get();
+        ComPtr<ID2D1Bitmap> bmp;
+        if (HBITMAP hb = ShellUtil::Icon(path, (int)(48 * k))) {
+            ComPtr<IWICBitmap> wb;
+            if (SUCCEEDED(wic->CreateBitmapFromHBITMAP(hb, nullptr, WICBitmapUsePremultipliedAlpha, &wb))) {
+                ComPtr<IWICFormatConverter> conv; wic->CreateFormatConverter(&conv);
+                if (conv && SUCCEEDED(conv->Initialize(wb.Get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0, WICBitmapPaletteTypeCustom)))
+                    dc->CreateBitmapFromWicBitmap(conv.Get(), nullptr, &bmp);
+            }
+            DeleteObject(hb);
+        }
+        icons[path] = bmp;
+        return bmp.Get();
+    }
+    void DrawShelf(D2D1_RECT_F c, ID2D1SolidColorBrush* b, float a) {
+        if (!shelf.empty()) {
+            D2D1_RECT_F cr = R(CARD_W - 72, 11, 56, 24, c);
+            b->SetColor(Hex(hoverId == H_SHELFCLEAR ? 0x24272d : 0x1a1c21, a));
+            dc->FillRoundedRectangle(D2D1::RoundedRect(cr, 12 * k, 12 * k), b);
+            Text(L"Clear", cr, Font(12, DWRITE_FONT_WEIGHT_MEDIUM, false, DWRITE_TEXT_ALIGNMENT_CENTER).Get(), b, Hex(0xb3b7bf, a));
+            hits.push_back({ cr, H_SHELFCLEAR });
+        }
+        float H = CardH();
+        if (shelf.empty() || dropHover) {
+            D2D1_RECT_F z = R(16, 48, CARD_W - 32, H - 64, c);
+            if (!shelf.empty()) z = R(16, 48, CARD_W - 32, H - 64, c);
+            ComPtr<ID2D1StrokeStyle> dash;
+            float dashes[] = { 4, 3 };
+            d2d->CreateStrokeStyle(D2D1::StrokeStyleProperties(D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND,
+                D2D1_LINE_JOIN_ROUND, 10, D2D1_DASH_STYLE_CUSTOM, 0), dashes, 2, &dash);
+            if (dropHover) { b->SetColor(Hex(0xd4f53c, a * 0.07f)); dc->FillRoundedRectangle(D2D1::RoundedRect(z, 16 * k, 16 * k), b); }
+            b->SetColor(dropHover ? Hex(0xd4f53c, a) : Hex(0x3a3e46, a));
+            dc->DrawRoundedRectangle(D2D1::RoundedRect(z, 16 * k, 16 * k), b, 1.4f * k, dash.Get());
+            float cy = (z.top + z.bottom) / 2;
+            SmallIcon(5, D2D1::RectF((z.left + z.right) / 2 - 16 * k, cy - 44 * k, (z.left + z.right) / 2 + 16 * k, cy - 12 * k), b, dropHover ? Hex(0xd4f53c, a) : Hex(0xb3b7bf, a));
+            Text(dropHover ? L"Release to park them here" : L"Drop files here to keep them handy",
+                D2D1::RectF(z.left, cy - 6 * k, z.right, cy + 16 * k), Font(14, DWRITE_FONT_WEIGHT_SEMI_BOLD, false, DWRITE_TEXT_ALIGNMENT_CENTER).Get(), b, Hex(0xf3f4f6, a));
+            Text(L"Drag them back out into any app. The files stay where they are.",
+                D2D1::RectF(z.left, cy + 18 * k, z.right, cy + 38 * k), Font(12, DWRITE_FONT_WEIGHT_REGULAR, false, DWRITE_TEXT_ALIGNMENT_CENTER).Get(), b, Hex(0x8c919a, a));
+            return;
+        }
+        const int perRow = 5;
+        const float tw = 84, th = 88;
+        int rows = (int)((shelf.size() + perRow - 1) / perRow);
+        shelfScroll = std::clamp(shelfScroll, 0, std::max(0, rows - 2));
+        float x0 = (CARD_W - perRow * tw) / 2;
+        auto fn = Font(11.5f, DWRITE_FONT_WEIGHT_REGULAR, false, DWRITE_TEXT_ALIGNMENT_CENTER);
+        for (size_t i = (size_t)shelfScroll * perRow; i < shelf.size() && i < (size_t)(shelfScroll + 2) * perRow; ++i) {
+            int col = (int)(i % perRow), row = (int)(i / perRow) - shelfScroll;
+            D2D1_RECT_F t = R(x0 + col * tw + 3, 48 + row * th, tw - 6, th - 6, c);
+            int base = H_SHELF + (int)i * 2;
+            bool hov = hoverId == base || hoverId == base + 1;
+            if (hov) { b->SetColor(Hex(0x15171b, a)); dc->FillRoundedRectangle(D2D1::RoundedRect(t, 12 * k, 12 * k), b); }
+            float icx = (t.left + t.right) / 2;
+            D2D1_RECT_F ir = D2D1::RectF(icx - 20 * k, t.top + 8 * k, icx + 20 * k, t.top + 48 * k);
+            if (ID2D1Bitmap* ic = ShelfIcon(shelf[i])) dc->DrawBitmap(ic, ir, a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+            else SmallIcon(2, ir, b, Hex(0xb3b7bf, a));
+            Text(PathFindFileNameW(shelf[i].c_str()), D2D1::RectF(t.left + 4 * k, t.top + 54 * k, t.right - 4 * k, t.top + 72 * k), fn.Get(), b, Hex(0xd6d8dc, a));
+            D2D1_RECT_F xr = D2D1::RectF(t.right - 22 * k, t.top + 4 * k, t.right - 4 * k, t.top + 22 * k);
+            if (hov) {
+                Circle(D2D1::Point2F((xr.left + xr.right) / 2, (xr.top + xr.bottom) / 2), 9 * k, b, Hex(hoverId == base + 1 ? 0x3a3e46 : 0x24272d, a));
+                SmallIcon(4, D2D1::RectF(xr.left + 4 * k, xr.top + 4 * k, xr.right - 4 * k, xr.bottom - 4 * k), b, Hex(0xd6d8dc, a));
+            }
+            hits.push_back({ xr, base + 1 });
+            hits.push_back({ t, base });
+        }
+        if (rows > 2) {
+            wchar_t more[32]; swprintf_s(more, L"%d of %d rows", shelfScroll + 1, rows - 1);
+            Text(more, R(16, H - 22, CARD_W - 32, 14, c), Font(10.5f, DWRITE_FONT_WEIGHT_REGULAR, true, DWRITE_TEXT_ALIGNMENT_CENTER).Get(), b, Hex(0x5d626b, a));
+        }
+    }
+
+    void DragOut(int i) {
+        if (i < 0 || i >= (int)shelf.size()) return;
+        ComPtr<IShellItem> item;
+        if (FAILED(SHCreateItemFromParsingName(shelf[i].c_str(), nullptr, IID_PPV_ARGS(&item)))) { PruneShelf(); Render(); return; }
+        ComPtr<IDataObject> obj;
+        if (FAILED(item->BindToHandler(nullptr, BHID_DataObject, IID_PPV_ARGS(&obj)))) return;
+        DWORD eff = 0;
+        dragOut = true;
+        SHDoDragDrop(hwnd, obj.Get(), nullptr, DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &eff);
+        dragOut = false;
+        pressId = 0;
+        PruneShelf();      // a move takes it off the shelf
+        Render();
+    }
+
+    void OnDrag(bool on) {
+        dropHover = on;
+        if (on) { tab = 4; pinnedOpen = false; hoverSince = 0; if (!expanded) Expand(true); else UpdateTargets(); }
+        Render();
+    }
+
     // ---------------------------------------------------------------- behaviour
     void SetClickThrough(bool on) {
         if (on == clickThrough) return;
@@ -628,7 +984,8 @@ struct Island::Impl {
     void Expand(bool on) {
         if (on == expanded) return;
         expanded = on;
-        if (on) { volume = Audio::Volume(); micMuted = Audio::MicMuted(); }
+        if (on) { volume = Audio::Volume(); micMuted = Audio::MicMuted(); if (tab == 4) PruneShelf(); }
+        else { hoverId = 0; dropHover = false; }
         UpdateTargets();
     }
 
@@ -643,13 +1000,25 @@ struct Island::Impl {
         bool over = c.x >= p.left - m && c.x <= p.right + m && c.y >= 0 && c.y <= p.bottom + m;
         // Hidden mode / tiny pill: touching the top edge near the middle also opens it.
         bool edge = pt.y <= mon.top + 1 && std::abs(pt.x - (mon.left + mon.right) / 2) < (LONG)(160 * k);
+        bool button = (GetAsyncKeyState(GetSystemMetrics(SM_SWAPBUTTON) ? VK_RBUTTON : VK_LBUTTON) & 0x8000) != 0;
+        if (button && !prevButton) pressOnPill = over || edge;   // a click meant for the app under the pill
+        prevButton = button;
         if (!expanded) {
-            if ((over && p.right - p.left > 4) || edge) { if (!hoverSince) hoverSince = now; if (now - hoverSince >= 140) Expand(true); }
-            else hoverSince = 0;
-            SetClickThrough(true);
+            if (button && !pressOnPill && (over || edge)) {
+                // Mouse held over the island: maybe a file drag. Let OLE see the window; DragEnter opens the shelf.
+                SetClickThrough(false);
+                hoverSince = 0;
+            } else {
+                if (!button && ((over && p.right - p.left > 4) || edge)) { if (!hoverSince) hoverSince = now; if (now - hoverSince >= 140) Expand(true); }
+                else hoverSince = 0;
+                SetClickThrough(true);
+            }
         } else {
             SetClickThrough(!over);
-            if (over || dragging || pinnedOpen) leaveSince = 0;
+            if (!over && hoverId) { hoverId = 0; Render(); }
+            if (pinnedOpen && over) pinnedOpen = false;                   // from here on, normal hover rules
+            if (pinnedOpen && now - pinnedSince > 8000) pinnedOpen = false;
+            if (over || dragging || pinnedOpen || dropHover || dragOut) leaveSince = 0;
             else { if (!leaveSince) leaveSince = now; if (now - leaveSince >= 380) { Expand(false); hoverSince = 0; } }
         }
         // keep the equalizer / progress / timers moving
@@ -702,17 +1071,45 @@ struct Island::Impl {
         Render();
     }
 
+    int HitAt(POINT c) {
+        for (auto& ht : hits)
+            if (c.x >= ht.r.left && c.x <= ht.r.right && c.y >= ht.r.top && c.y <= ht.r.bottom) return ht.id;
+        return 0;
+    }
+
     void Click(POINT c) {
         int hitId = 0;
         for (auto& ht : hits)
             if (c.x >= ht.r.left && c.x <= ht.r.right && c.y >= ht.r.top && c.y <= ht.r.bottom) { hitId = ht.id; break; }
         if (!hitId) return;
         {
-            switch (hitId) {
-            case H_TAB0: case H_TAB1: case H_TAB2:
+            if (hitId >= H_TAB0 && hitId < H_TAB0 + kTabs) {
                 tab = hitId - H_TAB0;
                 if (tab == 1) { brightness = Brightness::Get(); volume = Audio::Volume(); micMuted = Audio::MicMuted(); }
-                break;
+                if (tab == 4) PruneShelf();
+                clipScroll = 0;
+            } else if (hitId >= H_CHIP0 && hitId < H_CHIP0 + 6) {
+                clipFilter = hitId - H_CHIP0; clipScroll = 0;
+            } else if (hitId == H_SHELFCLEAR) {
+                shelf.clear(); icons.clear(); SaveShelf();
+            } else if (hitId >= H_SHELF) {
+                int i = (hitId - H_SHELF) / 2;
+                if ((hitId - H_SHELF) % 2 == 1 && i < (int)shelf.size()) { icons.erase(shelf[i]); shelf.erase(shelf.begin() + i); SaveShelf(); }
+            } else if (hitId >= H_CLIPROW && clip) {
+                size_t row = (size_t)(hitId - H_CLIPROW) / 4;
+                int part = (hitId - H_CLIPROW) % 4;
+                if (row < clipIds.size()) {
+                    uint64_t id = clipIds[row];
+                    if (part == 1) clip->TogglePin(id);
+                    else if (part == 2) clip->Remove(id);
+                    else if (clip->CopyBack(id)) {
+                        pinnedOpen = false;
+                        Expand(false);
+                        Message(L"Copied. Paste with Ctrl+V", 0, 1800);
+                    }
+                }
+            }
+            switch (hitId) {
             case H_PREV: media.Command(3); break;
             case H_PLAY: media.Command(1); mi.playing = !mi.playing; break;
             case H_NEXT: media.Command(2); break;
@@ -741,11 +1138,44 @@ struct Island::Impl {
             for (auto& ht : hits) if ((ht.id == H_VOL || ht.id == H_BRI) && c.x >= ht.r.left && c.x <= ht.r.right && c.y >= ht.r.top && c.y <= ht.r.bottom) {
                 dragging = true; dragId = ht.id; SetCapture(hw); SetSlider(dragId, c); return 0;
             }
+            int id = HitAt(c);
+            pressId = (id >= H_SHELF && (id - H_SHELF) % 2 == 0) ? id : 0;
+            pressPt = c;
             return 0;
         }
-        case WM_MOUSEMOVE:
-            if (dragging) { POINT c{ (short)LOWORD(lp), (short)HIWORD(lp) }; SetSlider(dragId, c); }
+        case WM_LBUTTONDBLCLK: {
+            int id = HitAt(POINT{ (short)LOWORD(lp), (short)HIWORD(lp) });
+            if (id >= H_SHELF && (id - H_SHELF) % 2 == 0) {
+                size_t i = (size_t)(id - H_SHELF) / 2;
+                if (i < shelf.size()) ShellExecuteW(nullptr, L"open", shelf[i].c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            }
             return 0;
+        }
+        case WM_MOUSEMOVE: {
+            POINT c{ (short)LOWORD(lp), (short)HIWORD(lp) };
+            if (dragging) { SetSlider(dragId, c); return 0; }
+            if (pressId && (wp & MK_LBUTTON) &&
+                (std::abs(c.x - pressPt.x) > GetSystemMetrics(SM_CXDRAG) || std::abs(c.y - pressPt.y) > GetSystemMetrics(SM_CYDRAG))) {
+                int i = (pressId - H_SHELF) / 2;
+                pressId = 0;
+                DragOut(i);
+                return 0;
+            }
+            int id = HitAt(c);
+            if (id != hoverId) { hoverId = id; Render(); }
+            TRACKMOUSEEVENT tme{ sizeof(tme), TME_LEAVE, hw, 0 };
+            TrackMouseEvent(&tme);
+            return 0;
+        }
+        case WM_MOUSELEAVE:
+            if (hoverId) { hoverId = 0; Render(); }
+            return 0;
+        case WM_MOUSEWHEEL: {
+            int d = GET_WHEEL_DELTA_WPARAM(wp);
+            if (tab == 3) { clipScroll -= d / 120.0f * CLIP_ROW * 1.5f; Render(); }
+            else if (tab == 4) { shelfScroll += d < 0 ? 1 : -1; Render(); }
+            return 0;
+        }
         case WM_LBUTTONUP: {
             POINT c{ (short)LOWORD(lp), (short)HIWORD(lp) };
             if (dragging) {
@@ -753,6 +1183,7 @@ struct Island::Impl {
                 if (dragId == H_BRI && briPending) SetSlider(H_BRI, c, true);
                 return 0;
             }
+            pressId = 0;
             Click(c);
             return 0;
         }
@@ -788,6 +1219,78 @@ struct Island::Impl {
     static const UINT WM_MEDIA_MSG = WM_MEDIA, WM_VOLUME_MSG = WM_VOLUME;
 };
 
+// OLE drop target: files dragged onto the island go on the shelf (as references; nothing is copied or moved).
+struct ShelfDrop : IDropTarget {
+    std::atomic<ULONG> refs{ 1 };
+    Island::Impl* I;
+    ComPtr<IDropTargetHelper> helper;
+    bool ok = false;
+    explicit ShelfDrop(Island::Impl* i) : I(i) { CoCreateInstance(CLSID_DragDropHelper, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&helper)); }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
+        if (iid == IID_IUnknown || iid == IID_IDropTarget) { *out = static_cast<IDropTarget*>(this); AddRef(); return S_OK; }
+        *out = nullptr; return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
+    ULONG STDMETHODCALLTYPE Release() override { ULONG r = --refs; if (!r) delete this; return r; }
+    // Never MOVE: the source would delete the file, and the shelf only holds a reference.
+    DWORD Effect(DWORD allowed) const {
+        if (!ok) return DROPEFFECT_NONE;
+        if (allowed & DROPEFFECT_COPY) return DROPEFFECT_COPY;
+        if (allowed & DROPEFFECT_LINK) return DROPEFFECT_LINK;
+        return DROPEFFECT_NONE;
+    }
+    static std::vector<std::wstring> Files(IDataObject* obj) {
+        std::vector<std::wstring> out;
+        FORMATETC fe{ CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+        STGMEDIUM sm{};
+        if (SUCCEEDED(obj->GetData(&fe, &sm))) {
+            if (auto d = (HDROP)GlobalLock(sm.hGlobal)) {
+                UINT n = DragQueryFileW(d, 0xFFFFFFFF, nullptr, 0);
+                for (UINT i = 0; i < n && i < 200; ++i) { wchar_t pth[MAX_PATH * 4]; if (DragQueryFileW(d, i, pth, ARRAYSIZE(pth))) out.push_back(pth); }
+                GlobalUnlock(sm.hGlobal);
+            }
+            ReleaseStgMedium(&sm);
+        }
+        return out;
+    }
+    HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* obj, DWORD, POINTL pt, DWORD* eff) override {
+        FORMATETC fe{ CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+        ok = obj->QueryGetData(&fe) == S_OK;
+        *eff = Effect(*eff);
+        POINT p{ pt.x, pt.y };
+        if (helper) helper->DragEnter(I->hwnd, obj, &p, *eff);
+        if (ok && !I->dragOut) I->OnDrag(true);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE DragOver(DWORD, POINTL pt, DWORD* eff) override {
+        *eff = I->dragOut ? DROPEFFECT_NONE : Effect(*eff);
+        POINT p{ pt.x, pt.y };
+        if (helper) helper->DragOver(&p, *eff);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE DragLeave() override {
+        if (helper) helper->DragLeave();
+        if (I->dropHover) I->OnDrag(false);
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE Drop(IDataObject* obj, DWORD, POINTL pt, DWORD* eff) override {
+        *eff = I->dragOut ? DROPEFFECT_NONE : Effect(*eff);
+        POINT p{ pt.x, pt.y };
+        if (helper) helper->Drop(obj, &p, *eff);
+        if (ok && !I->dragOut) I->AddShelf(Files(obj));
+        I->OnDrag(false);
+        return S_OK;
+    }
+};
+
+void Island::Impl::RegisterDrop() {
+    if (!oleInit) oleInit = SUCCEEDED(OleInitialize(nullptr));
+    auto* t = new ShelfDrop(this);
+    HRESULT hr = RegisterDragDrop(hwnd, t);
+    t->Release();   // the system holds its own reference
+    if (FAILED(hr)) LogLine("Island: RegisterDragDrop failed 0x%08X", (unsigned)hr);
+}
+
 Island::~Island() { if (impl_) { impl_->Destroy(); delete impl_; } }
 
 void Island::Apply(const IslandSettings& s, bool inGame) {
@@ -810,6 +1313,7 @@ void Island::ShowMessage(const std::wstring& text, unsigned color, int ms) {
 void Island::ToggleCard() {
     if (!impl_ || !impl_->hwnd) return;
     impl_->pinnedOpen = !impl_->expanded;
+    impl_->pinnedSince = GetTickCount64();
     impl_->Expand(!impl_->expanded);
     if (!impl_->expanded) impl_->pinnedOpen = false;
 }
@@ -822,9 +1326,13 @@ void Island::ToggleMic() {
 }
 void Island::OpenCard(int tab) {
     if (!impl_ || !impl_->hwnd) return;
-    impl_->tab = std::clamp(tab, 0, 2);
+    impl_->tab = std::clamp(tab, 0, kTabs - 1);
     if (impl_->tab == 1) { impl_->brightness = Brightness::Get(); impl_->volume = Audio::Volume(); }
+    if (impl_->tab == 4) impl_->PruneShelf();
+    impl_->clipScroll = 0;
     impl_->pinnedOpen = true;
+    impl_->pinnedSince = GetTickCount64();
+    if (impl_->expanded) { impl_->UpdateTargets(); impl_->Render(); }
     impl_->Expand(true);
 }
 void Island::PickColor() { if (impl_ && impl_->hwnd) impl_->picker.Start(); }
@@ -832,3 +1340,10 @@ void Island::Reassert() {
     if (impl_ && impl_->hwnd) SetWindowPos(impl_->hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
 }
 HWND Island::Hwnd() const { return impl_ ? impl_->hwnd : nullptr; }
+void Island::SetClipboard(ClipboardHistory* c) {
+    if (!impl_) impl_ = new Impl();
+    impl_->clip = c;
+}
+void Island::ClipboardChanged() {
+    if (impl_ && impl_->hwnd && impl_->expanded && impl_->tab == 3) impl_->Render();
+}

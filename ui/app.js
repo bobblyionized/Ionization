@@ -8,7 +8,7 @@ const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const svgUse = (id, size = 14) => `<svg width="${size}" height="${size}"><use href="#${id}"/></svg>`;
 
 const DEFAULTS = {
-  blur: { enabled: true, mode: "smooth", strength: 45, opacity: 100 },
+  blur: { enabled: true, mode: "smooth", strength: 45, opacity: 100, quality: "high", fps: 120 },
   visuals: { enabled: true },
   color: { exposure: 0, contrast: 0, saturation: 100, vibrance: 0, temperature: 0, tint: 0 },
   lut: { id: "neutral", intensity: 100 },
@@ -19,6 +19,11 @@ const DEFAULTS = {
   perf: { gameMode: true, quality: "full", hideClockInGames: true, games: [] },
   memory: { lowPriority: false, autoTrim: false, autoTrimAt: 85, gameBoost: true },
   island: { enabled: false, shape: "island", theme: "black", size: 100, hidden: false, volumeOsd: true },
+  clipboard: { enabled: false, max: 60 },
+  widgets: { layer: "desktop", theme: "glass", units: "c", hour24: true, size: 100,
+    weather: { on: false, x: -1, y: -1, place: "", lat: 0, lon: 0 },
+    clocks: { on: false, x: -1, y: -1, zones: [{ name: "London", tz: "Europe/London" }, { name: "New York", tz: "America/New_York" }, { name: "Tokyo", tz: "Asia/Tokyo" }] },
+    calendar: { on: false, x: -1, y: -1 }, todo: { on: false, x: -1, y: -1, items: [] }, stats: { on: false, x: -1, y: -1 } },
   dock: { enabled: false, mode: "hover", size: 48, magnify: 60, hideTaskbar: true, showClock: true, pins: [], imported: false },
   profiles: [],
   activeProfile: "Clean",
@@ -102,6 +107,13 @@ function onHost(msg) {
     case "focus": state.focused = !!msg.value; if (state.focused) Demo.kick(); break;
     case "macroStatus": case "macroRecorded": if (window.Macros) Macros.onMessage(msg); break;
     case "mem": state.mem = msg.value; renderMemory(); break;
+    case "clipList": clipItems = msg.items || []; clipEnabled = !!msg.enabled; renderClipboard(); break;
+    case "geoResults":
+      geoResults[msg.purpose === "clock" ? "clock" : "weather"] = msg.results || [];
+      if (msg.error) toast("Couldn't reach the place search. Check your connection", "error");
+      else if (!(msg.results || []).length) toast(`No places found for "${msg.q}"`, "info");
+      renderWidgets(); break;
+    case "showView": showView(msg.view); break;
     case "memTrimmed": state.lastTrim = { freed: msg.freed, trimmed: msg.trimmed, why: msg.why, at: Date.now() }; renderMemory();
       if (msg.why !== "auto") toast(`Freed ${fmtBytes(msg.freed)} from ${msg.trimmed} processes`, "ok"); break;
   }
@@ -646,7 +658,7 @@ function renderPerfStats() {
 }
 function renderPerf() {
   const P = state.settings.perf;
-  setSeg($("#qualitySeg"), "v", P.quality);
+  setSeg($("#qualitySeg"), "v", state.settings.blur.quality || "high");
   const games = P.games || [];
   $("#gameCount").textContent = `${games.length} ${games.length === 1 ? "GAME" : "GAMES"}`;
   const list = $("#gameList");
@@ -680,6 +692,154 @@ function addGame(exe) {
   if (!games.some((g) => g.exe === exe)) games.push({ exe, mode: "pause" });
   pushSettings(); renderPerf();
   toast(`${gameName(exe)} added to Game Mode`, "ok");
+}
+
+
+// ------------------------------------------------------------------ quality + frame rate
+const BQ_HINT = {
+  low: "8 samples, half-res trails. Lightest on the GPU",
+  medium: "16 samples with fine dither",
+  high: "32 samples. The default balance",
+  ultra: "Up to 64 samples for the smoothest streaks. Most GPU",
+};
+function renderQuality() {
+  const B = state.settings.blur;
+  setSeg($("#blurQualitySeg"), "v", B.quality || "high");
+  setSeg($("#qualitySeg"), "v", B.quality || "high");
+  setSeg($("#fpsSeg"), "v", String(B.fps ?? 120));
+  $("#bqHint").textContent = BQ_HINT[B.quality] || BQ_HINT.high;
+  const hz = refreshRate();
+  const cap = Number(B.fps ?? 120);
+  const eff = cap > 0 ? Math.min(cap, hz) : hz;
+  $("#fpsHint").textContent = cap > 0 && cap < hz
+    ? `Redraws up to ${cap} fps on this ${hz} Hz display. Lower saves GPU`
+    : `Runs at ${eff} fps, the display's ${hz} Hz${hz <= 60 ? ". Higher limits take effect on 120 Hz+ monitors" : ""}`;
+}
+
+// ------------------------------------------------------------------ clipboard
+let clipItems = [], clipFilter = "all", clipEnabled = false;
+function ago(ms) {
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  return s < 60 ? "now" : s < 3600 ? Math.floor(s / 60) + "m" : s < 86400 ? Math.floor(s / 3600) + "h" : Math.floor(s / 86400) + "d";
+}
+function renderClipboard() {
+  const C = state.settings.clipboard || {};
+  $("[data-pip=clipboard]").classList.toggle("on", !!C.enabled);
+  setSeg($("#clipFilterSeg"), "v", clipFilter);
+  const hk = state.settings.app.hotkeys, isl = state.settings.island && state.settings.island.enabled;
+  const tag = !hk ? `<span class="tag dim">disabled</span>` : !isl ? `<span class="tag dim">island off</span>` : state.hotkeys.clip ? `<span class="tag">ready</span>` : `<span class="tag warn">in use</span>`;
+  $("#clipKeys").innerHTML = `<li><div><p class="t" style="margin:0">Open the island clipboard</p></div><div class="r"><span style="display:flex;gap:3px"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>H</kbd></span>${tag}</div></li>`;
+  const list = $("#clipList");
+  if (!list) return;
+  const match = (it) => clipFilter === "all" ? true : clipFilter === "pinned" ? it.pinned : it.kind === clipFilter;
+  const items = clipItems.filter(match);
+  if (!C.enabled && !clipItems.length) { list.innerHTML = `<li class="empty-note" style="display:block"><b>History is off</b>Turn on Keep history and everything you copy shows up here.</li>`; return; }
+  if (!items.length) { list.innerHTML = `<li class="empty-note" style="display:block"><b>${clipFilter === "pinned" ? "Nothing pinned" : "Nothing here yet"}</b>${clipFilter === "pinned" ? "Pin an item to keep it past the limit." : "Copy something and it shows up here."}</li>`; return; }
+  const icon = { text: "i-text", link: "i-link", files: "i-file", image: "i-image" };
+  list.innerHTML = items.map((it) => {
+    const first = it.kind === "files" ? (it.text.split("\n")[0].split("\\").pop() + (it.files > 1 ? `  +${it.files - 1} more` : ""))
+      : it.kind === "image" ? "Image" : it.text.replace(/\s+/g, " ").trim().slice(0, 160);
+    const meta = it.kind === "image" ? `${it.w} x ${it.h}` : it.kind === "files" ? (it.files === 1 ? "File" : `${it.files} files`)
+      : it.kind === "link" ? "Link" : `Text, ${it.chars} chars`;
+    const ic = it.thumb ? `<img src="${it.thumb}" alt="">` : svgUse(icon[it.kind] || "i-text", 16);
+    return `<li class="click" data-id="${it.id}" tabindex="0"><div class="clip-ic ${it.kind}">${ic}</div>
+      <div class="clip-main"><p class="t" style="margin:0">${escapeHtml(first)}</p><p class="s" style="margin:2px 0 0">${meta}  ·  ${ago(it.time)}</p></div>
+      <div class="clip-acts"><button class="icon-btn sm${it.pinned ? " on" : ""}" data-pin title="${it.pinned ? "Unpin" : "Pin"}">${svgUse("i-pin", 14)}</button>
+      <button class="icon-btn sm" data-del title="Delete">${svgUse("i-close", 14)}</button></div></li>`;
+  }).join("");
+  $$("li[data-id]", list).forEach((li) => {
+    const id = Number(li.dataset.id);
+    li.addEventListener("click", (e) => {
+      if (e.target.closest("[data-pin]")) { send("clipPin", { id }); return; }
+      if (e.target.closest("[data-del]")) { send("clipDelete", { id }); return; }
+      send("clipCopy", { id });
+    });
+    li.addEventListener("keydown", (e) => { if (e.key === "Enter") send("clipCopy", { id }); });
+  });
+}
+
+// ------------------------------------------------------------------ widgets
+const WIDGETS = [
+  { id: "weather", name: "Weather", desc: "Now and the next hours" },
+  { id: "clocks", name: "World clock", desc: "Up to six cities" },
+  { id: "calendar", name: "Calendar", desc: "This month at a glance" },
+  { id: "todo", name: "To-do", desc: "Check tasks off on the desktop" },
+  { id: "stats", name: "System", desc: "CPU, GPU, RAM and network" },
+];
+const geoResults = { weather: [], clock: [] };
+function widgetPreview(id) {
+  const W = state.settings.widgets;
+  const deg = W.units === "f" ? "&deg;F" : "&deg;";
+  if (id === "weather") return `<div class="lab">${escapeHtml((W.weather.place || "WEATHER").toUpperCase())}</div><div class="big">${W.units === "f" ? 64 : 18}${W.units === "f" ? "&deg;" : "&deg;"}</div><div class="sub">Partly cloudy</div>
+    <svg class="wico" width="34" height="34" viewBox="0 0 24 24"><circle cx="9" cy="9" r="4" fill="#f5c542"/><g fill="#d6d8dc"><circle cx="10" cy="15" r="4"/><circle cx="15" cy="12.5" r="5"/><circle cx="19" cy="15.5" r="3.4"/><rect x="6.4" y="15" width="16" height="4.6" rx="2.2"/></g></svg>`;
+  if (id === "clocks") {
+    const z = (W.clocks.zones || []).slice(0, 3);
+    return `<div class="lab">WORLD CLOCK</div>` + (z.length ? z.map((c) => {
+      let t = "--:--";
+      try { t = new Intl.DateTimeFormat(W.hour24 ? "en-GB" : "en-US", { hour: "numeric", minute: "2-digit", hour12: !W.hour24, timeZone: c.tz }).format(new Date()); } catch (e) {}
+      return `<div class="zl"><span>${escapeHtml(c.name)}</span><span>${t}</span></div>`;
+    }).join("") : `<div class="sub" style="margin-top:8px">No cities yet</div>`);
+  }
+  if (id === "calendar") {
+    const d = new Date(), today = d.getDate();
+    const first = new Date(d.getFullYear(), d.getMonth(), 1).getDay();
+    const lead = (first + 6) % 7;
+    let cells = "";
+    for (let i = 0; i < 14; i++) { const n = i - lead + 1 + Math.max(0, Math.floor((today - 1 + lead) / 7) - 1) * 7; cells += `<span class="${n === today ? "today" : ""}">${n > 0 ? n : ""}</span>`; }
+    return `<div class="lab">${d.toLocaleString("en-US", { month: "long" }).toUpperCase()}</div><div class="cal">${cells}</div>`;
+  }
+  if (id === "todo") {
+    const items = (W.todo.items || []).slice(0, 3);
+    return `<div class="lab">TO-DO</div>` + (items.length ? items.map((t) => `<div class="td${t.done ? " done" : ""}"><i></i>${escapeHtml(t.text)}</div>`).join("")
+      : `<div class="td"><i></i>Plan the week</div><div class="td done"><i></i>Back up photos</div>`);
+  }
+  return `<div class="lab">SYSTEM</div><div class="sb">CPU<b style="--v:34%"></b></div><div class="sb">GPU<b style="--v:22%"></b></div><div class="sb">RAM<b style="--v:61%"></b></div>`;
+}
+function renderWidgets() {
+  const W = state.settings.widgets;
+  if (!W || !$("#widgetCards")) return;
+  const any = WIDGETS.some((w) => W[w.id] && W[w.id].on);
+  $("[data-pip=widgets]").classList.toggle("on", any);
+  $("#widgetCards").innerHTML = WIDGETS.map((w) => `<div class="wcard${W[w.id].on ? " on" : ""}"><div class="wprev">${widgetPreview(w.id)}</div>
+    <div class="wcard-foot"><div style="min-width:0"><div class="t">${w.name}</div><div class="s">${w.desc}</div></div>
+    <label class="switch"><input type="checkbox" data-wtoggle="${w.id}" ${W[w.id].on ? "checked" : ""}><span class="track"><span class="knob"></span></span></label></div></div>`).join("");
+  $$("[data-wtoggle]").forEach((el) => el.addEventListener("change", () => set(`widgets.${el.dataset.wtoggle}.on`, el.checked)));
+  setSeg($("#widgetLayerSeg"), "v", W.layer);
+  setSeg($("#widgetThemeSeg"), "v", W.theme);
+  setSeg($("#unitsSeg"), "v", W.units);
+  $("#weatherPlace").innerHTML = W.weather.place ? `Showing <b style="color:var(--fg)">${escapeHtml(W.weather.place)}</b>` : "No place set. Search for your city below.";
+  const geoRow = (r, i, purpose) => `<li class="click" data-geo="${purpose}" data-i="${i}"><div style="min-width:0"><p class="t" style="margin:0">${escapeHtml(r.name)}</p>
+    <p class="s" style="margin:2px 0 0">${escapeHtml([r.admin1, r.country].filter(Boolean).join(", "))}${purpose === "clock" && r.tz ? "  ·  " + escapeHtml(r.tz) : ""}</p></div></li>`;
+  $("#weatherResults").innerHTML = geoResults.weather.map((r, i) => geoRow(r, i, "weather")).join("");
+  $("#zoneResults").innerHTML = geoResults.clock.map((r, i) => geoRow(r, i, "clock")).join("");
+  $$("[data-geo]").forEach((li) => li.addEventListener("click", () => {
+    const purpose = li.dataset.geo, r = geoResults[purpose][Number(li.dataset.i)];
+    if (!r) return;
+    if (purpose === "weather") {
+      W.weather.place = r.name; W.weather.lat = r.lat; W.weather.lon = r.lon;
+      if (!W.weather.on) W.weather.on = true;
+      $("#weatherQ").value = "";
+    } else {
+      const zones = W.clocks.zones || (W.clocks.zones = []);
+      if (zones.length < 6 && r.tz && !zones.some((z) => z.tz === r.tz && z.name === r.name)) zones.push({ name: r.name, tz: r.tz });
+      $("#zoneQ").value = "";
+    }
+    geoResults[purpose] = [];
+    pushSettings(); renderWidgets();
+  }));
+  const zones = W.clocks.zones || [];
+  $("#zoneCount").textContent = `${zones.length} OF 6`;
+  $("#zoneList").innerHTML = zones.length ? zones.map((z, i) => `<li><div style="min-width:0"><p class="t" style="margin:0">${escapeHtml(z.name)}</p><p class="s" style="margin:2px 0 0">${escapeHtml(z.tz)}</p></div>
+    <div class="r" style="display:flex;gap:4px;grid-auto-flow:column"><button class="btn ghost sm" data-zmove="${i}" ${i === 0 ? "disabled" : ""}>Up</button><button class="btn ghost sm" data-zdel="${i}">Remove</button></div></li>`).join("")
+    : `<li><p class="note" style="margin:0">No cities yet. Search to add one.</p></li>`;
+  $$("[data-zdel]").forEach((b) => b.addEventListener("click", () => { zones.splice(Number(b.dataset.zdel), 1); pushSettings(); renderWidgets(); }));
+  $$("[data-zmove]").forEach((b) => b.addEventListener("click", () => { const i = Number(b.dataset.zmove); [zones[i - 1], zones[i]] = [zones[i], zones[i - 1]]; pushSettings(); renderWidgets(); }));
+  const todos = W.todo.items || [];
+  $("#todoList").innerHTML = todos.length ? todos.map((t, i) => `<li><label style="display:flex;align-items:center;gap:10px;min-width:0;cursor:pointer">
+    <input type="checkbox" data-tdone="${i}" ${t.done ? "checked" : ""} style="accent-color:var(--volt)"><span class="t" style="${t.done ? "color:var(--fg-4);text-decoration:line-through" : ""}">${escapeHtml(t.text)}</span></label>
+    <button class="btn ghost sm" data-tdel="${i}">Delete</button></li>`).join("") : `<li><p class="note" style="margin:0">No tasks yet.</p></li>`;
+  $$("[data-tdone]").forEach((c) => c.addEventListener("change", () => { todos[Number(c.dataset.tdone)].done = c.checked; pushSettings(); renderWidgets(); }));
+  $$("[data-tdel]").forEach((b) => b.addEventListener("click", () => { todos.splice(Number(b.dataset.tdel), 1); pushSettings(); renderWidgets(); }));
 }
 
 // ------------------------------------------------------------------ island
@@ -821,6 +981,9 @@ function refreshFor(section) {
   if (section === "perf") renderPerf();
   if (section === "dock") renderDock();
   if (section === "island") renderIsland();
+  if (section === "blur") renderQuality();
+  if (section === "clipboard") renderClipboard();
+  if (section === "widgets") renderWidgets();
 }
 function renderAll() {
   syncBinds();
@@ -836,6 +999,9 @@ function renderAll() {
   renderPerf();
   renderDock();
   renderIsland();
+  renderQuality();
+  renderClipboard();
+  renderWidgets();
   renderVisualsGate();
   schedulePreviews();
   $$(".seg").forEach(placeIndicator);
@@ -885,6 +1051,8 @@ function build() {
     { path: "dock.size", label: "Icon size", min: 32, max: 80, step: 1, unit: "px", def: 48 },
     { path: "dock.magnify", label: "Magnification", min: 0, max: 100, step: 1, unit: "%", def: 60, hint: "on hover" },
   ]);
+  rows("#clipRows", [{ path: "clipboard.max", label: "Keep", min: 20, max: 200, step: 10, unit: "", def: 60, hint: "items" }]);
+  rows("#widgetRows", [{ path: "widgets.size", label: "Size", min: 70, max: 140, step: 1, unit: "%", def: 100 }]);
   rows("#islandRows", [{ path: "island.size", label: "Size", min: 70, max: 140, step: 1, unit: "%", def: 100 }]);
   rows("#clockRows", [
     { path: "clock.size", label: "Size", min: 50, max: 200, step: 1, unit: "%", def: 100 },
@@ -895,7 +1063,26 @@ function build() {
   $("#autostartToggle").addEventListener("change", (e) => send("autostart", { value: e.target.checked }));
   $("#compareToggle").addEventListener("change", drawChart);
   $("#cmdBlur").addEventListener("click", () => set("blur.enabled", !get("blur.enabled")));
-  $$("#qualitySeg button").forEach((b) => b.addEventListener("click", () => set("perf.quality", b.dataset.v)));
+  $$("#qualitySeg button, #blurQualitySeg button").forEach((b) => b.addEventListener("click", () => set("blur.quality", b.dataset.v)));
+  $$("#fpsSeg button").forEach((b) => b.addEventListener("click", () => set("blur.fps", Number(b.dataset.v))));
+  $$("#clipFilterSeg button").forEach((b) => b.addEventListener("click", () => { clipFilter = b.dataset.v; renderClipboard(); }));
+  $("#clipClearBtn").addEventListener("click", () => send("clipClear"));
+  $$("#widgetLayerSeg button").forEach((b) => b.addEventListener("click", () => set("widgets.layer", b.dataset.v)));
+  $$("#widgetThemeSeg button").forEach((b) => b.addEventListener("click", () => set("widgets.theme", b.dataset.v)));
+  $$("#unitsSeg button").forEach((b) => b.addEventListener("click", () => set("widgets.units", b.dataset.v)));
+  $("#weatherSearch").addEventListener("submit", (e) => { e.preventDefault(); const q = $("#weatherQ").value.trim(); if (q.length >= 2) send("geoSearch", { q, purpose: "weather" }); });
+  $("#zoneSearch").addEventListener("submit", (e) => { e.preventDefault(); const q = $("#zoneQ").value.trim(); if (q.length >= 2) send("geoSearch", { q, purpose: "clock" }); });
+  $("#todoForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const text = $("#todoText").value.trim();
+    if (!text) return;
+    const W = state.settings.widgets;
+    (W.todo.items || (W.todo.items = [])).push({ text, done: false });
+    if (!W.todo.on) W.todo.on = true;
+    $("#todoText").value = "";
+    pushSettings(); renderWidgets();
+  });
+  $("#todoClearDone").addEventListener("click", () => { const W = state.settings.widgets; W.todo.items = (W.todo.items || []).filter((t) => !t.done); pushSettings(); renderWidgets(); });
   $$("#dockModeSeg button").forEach((b) => b.addEventListener("click", () => set("dock.mode", b.dataset.v)));
   $$("#islandShapeSeg button").forEach((b) => b.addEventListener("click", () => set("island.shape", b.dataset.v)));
   $$("#islandThemeSeg button").forEach((b) => b.addEventListener("click", () => set("island.theme", b.dataset.v)));
@@ -964,6 +1151,8 @@ function showView(v) {
     if (v === "blur") { drawChart(); Demo.kick(); }
     if (v === "profiles") renderProfiles();
     memPolling(v === "memory");
+    if (v === "clipboard") send("clipList");
+    if (v === "widgets") renderWidgets();
     schedulePreviews();
   });
 }
@@ -1141,6 +1330,25 @@ const Mock = {
       onHost({ type: "mem", value: { total, available: avail, commit: 9.4 * GB, commitLimit: 12.6 * GB, load: Math.round((1 - avail / total) * 100),
         top: [["claude.exe", 1.2, 9], ["robloxplayerbeta.exe", 0.95, 1], ["msedgewebview2.exe", 0.35, 12], ["discord.exe", 0.31, 6], ["explorer.exe", 0.18, 1], ["searchhost.exe", 0.12, 1]]
           .map(([exe, g, n]) => ({ exe, ws: g * GB, n })) } });
+    } else if (m.type === "clipList" || m.type === "clipPin" || m.type === "clipDelete" || m.type === "clipClear") {
+      const now = Date.now();
+      if (!this.clips) this.clips = [
+        { id: 1, kind: "text", text: "Meet at 6 by the north entrance, bring the tickets", chars: 49, time: now - 40e3, pinned: true },
+        { id: 2, kind: "link", text: "https://open-meteo.com/en/docs", chars: 30, time: now - 6 * 60e3 },
+        { id: 3, kind: "files", text: "C:\\Users\\you\\Documents\\report-final.pdf\nC:\\Users\\you\\Documents\\notes.txt", files: 2, time: now - 50 * 60e3 },
+        { id: 4, kind: "image", text: "", w: 1920, h: 1080, time: now - 3 * 3600e3 },
+        { id: 5, kind: "text", text: "const speed = distance / time;", chars: 30, time: now - 26 * 3600e3 }];
+      if (m.type === "clipPin") this.clips.forEach((c) => { if (c.id === m.id) c.pinned = !c.pinned; });
+      if (m.type === "clipDelete") this.clips = this.clips.filter((c) => c.id !== m.id);
+      if (m.type === "clipClear") this.clips = this.clips.filter((c) => c.pinned);
+      onHost({ type: "clipList", items: this.clips, enabled: state.settings.clipboard.enabled });
+    } else if (m.type === "clipCopy") {
+      onHost({ type: "toast", text: "Copied to the clipboard", tone: "ok" });
+    } else if (m.type === "geoSearch") {
+      const name = m.q.replace(/\b\w/g, (c) => c.toUpperCase());
+      setTimeout(() => onHost({ type: "geoResults", purpose: m.purpose, q: m.q, results: [
+        { name, admin1: "Demo Region", country: "United States", lat: 47.61, lon: -122.33, tz: "America/Los_Angeles" },
+        { name, admin1: "England", country: "United Kingdom", lat: 51.5, lon: -0.12, tz: "Europe/London" }] }), 250);
     } else if (m.type === "dockImport") {
       state.settings.dock.pins = [{ name: "File Explorer", launch: "C:\\...\\File Explorer.lnk" }, { name: "Google Chrome", launch: "C:\\...\\Google Chrome.lnk" },
         { name: "Discord", launch: "C:\\...\\Discord.lnk" }, { name: "Spotify", launch: "C:\\...\\Spotify.lnk" }];

@@ -52,6 +52,9 @@ add_executable(Ionization WIN32
   src/media.cpp
   src/audio.cpp
   src/island.cpp
+  src/clipboard.cpp
+  src/widgets.cpp
+  src/net.cpp
   "${CMAKE_BINARY_DIR}/app.rc"
   "${UI_RC}"
 )
@@ -67,7 +70,7 @@ target_link_options(Ionization PRIVATE /MANIFEST:EMBED)
 target_link_libraries(Ionization PRIVATE
   "${CMAKE_SOURCE_DIR}/third_party/webview2/lib/WebView2LoaderStatic.lib"
   d3d11 dxgi d3dcompiler dcomp d2d1 dwrite windowscodecs winhttp bcrypt
-  shlwapi shell32 ole32 oleaut32 user32 gdi32 dwmapi shcore advapi32 version pdh psapi windowsapp wbemuuid)
+  shlwapi shell32 ole32 oleaut32 user32 gdi32 dwmapi shcore advapi32 version pdh psapi windowsapp wbemuuid crypt32 iphlpapi)
 
 # Measurement tool (not shipped): a fullscreen GPU load that behaves like a game.
 add_executable(fpsbench tools/fpsbench/main.cpp)

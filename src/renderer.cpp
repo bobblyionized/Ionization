@@ -65,6 +65,7 @@ struct Constants {
     float bloom, bloomThresh, sharpen, chroma;
     float texelX, texelY, useLut, aspect;
     float srcTexelX, srcTexelY, opacity, shutter;
+    float tapStep, maxTaps, jitter, pad0;
 };
 static_assert(sizeof(Constants) % 16 == 0, "cbuffer alignment");
 
@@ -161,6 +162,10 @@ struct RenderSession {
     bool haveFrame = false, shown = false, resetAccum = true, presentedLast = false;
     unsigned seenVersion = ~0u;
     int framesSinceNew = 0;
+    // Frame-rate limit: a draw that comes too early waits (deferred) until the next allowed slot.
+    LARGE_INTEGER nextDueT{};   // when the next frame is due under the cap (keeps the average exact)
+    bool deferred = false, deferredNew = false;
+    int fpsCap = 0;
     LARGE_INTEGER qpf{}, lastT{}, statT{}, lastGrainT{};
     int presents = 0, captures = 0, loops = 0;
     float gpuMs = 0;
@@ -512,7 +517,10 @@ struct RenderSession {
         int mode = (p.blurOn && p.strength > 0) ? std::clamp(p.blurMode, 1, 3) : 0;
         float s = std::clamp(p.strength, 0.0f, 100.0f) / 100.0f;
         int n = 2 + (int)std::lround(s * (kMaxBlend - 2));
-        int quality = p.quality ? 1 : 0;
+        int quality = (p.quality && p.blurQuality > 0) ? 1 : 0;
+        fpsCap = p.fpsCap > 0 ? p.fpsCap : 0;
+        // Only limit when the cap is meaningfully below the display's refresh.
+        bool capped = fpsCap > 0 && fpsCap < refresh - 1;
         bool paramsChanged = version != seenVersion;
         seenVersion = version;
 
@@ -535,6 +543,11 @@ struct RenderSession {
         // Release the frame we held, right before asking for the next one (as the docs advise).
         if (holding) { dupl->ReleaseFrame(); holding = false; }
         UINT timeout = !haveFrame ? 500 : (idle ? (p.visualsOn && p.grain > 0 ? 42 : 250) : 0);
+        if (deferred && capped) {
+            // Sleep (inside the duplication wait) until the next allowed frame instead of spinning.
+            float wait = float(nextDueT.QuadPart - now.QuadPart) / float(qpf.QuadPart) - 0.5f / std::max(30, refresh);
+            timeout = (UINT)std::clamp((int)std::ceil(wait * 1000.0f), 1, 50);
+        }
         if (mode == 3 && !idle && !sharpDrawn && !paramsChanged && !resetAccum) timeout = 16;   // wake to draw the still frame
         if (GetEnvironmentVariableW(L"IONIZATION_DEBUG_CAPTUREONLY", nullptr, 0) > 0) timeout = 20;   // benchmarking only
         DXGI_OUTDUPL_FRAME_INFO fi{};
@@ -574,10 +587,23 @@ struct RenderSession {
         static const bool captureOnly = GetEnvironmentVariableW(L"IONIZATION_DEBUG_CAPTUREONLY", nullptr, 0) > 0;   // benchmarking only
         if (captureOnly) { presentedLast = false; QueryPerformanceCounter(&now); UpdateStats(now); return Continue; }
         QueryPerformanceCounter(&now);
-        bool mustDraw = newFrame || paramsChanged || resetAccum || grainTick || !dump.empty() || !shown ||
+        bool mustDraw = newFrame || deferred || paramsChanged || resetAccum || grainTick || !dump.empty() || !shown ||
             (mode == 3 ? (!sharpDrawn && stillNow) : !converged);
         if (!mustDraw) { presentedLast = false; UpdateStats(now); return Continue; }
-        if (grainTick || newFrame) lastGrainT = now;
+        bool fresh = newFrame || deferredNew;   // a captured frame not drawn yet
+        if (capped && shown && dump.empty() && !paramsChanged) {
+            // Draw on the vsync nearest the frame's due time (e.g. 120 on 144 Hz: mostly every vsync, every 5th skipped).
+            float toDue = float(nextDueT.QuadPart - now.QuadPart) / float(qpf.QuadPart);
+            if (toDue > 0.5f / std::max(30, refresh)) {
+                deferred = true;
+                deferredNew = fresh;
+                presentedLast = false;
+                UpdateStats(now);
+                return Continue;
+            }
+        }
+        deferred = deferredNew = false;
+        if (grainTick || fresh) lastGrainT = now;
 
         float dt = std::clamp(float(now.QuadPart - lastT.QuadPart) / float(qpf.QuadPart), 1.0f / 500, 1.0f / 20);
         lastT = now;
@@ -586,8 +612,12 @@ struct RenderSession {
         c.decay = (mode == 1 && !resetAccum) ? std::exp(-dt / tau) : 0.0f;
         c.opacity = std::clamp(p.opacity, 0.0f, 100.0f) / 100.0f;
         // Smooth: how much of the frame-to-frame motion the "shutter" smears (CapCut-like at ~1).
-        bool sharpFrame = mode == 3 && !newFrame && stillNow;
+        bool sharpFrame = mode == 3 && !fresh && stillNow;
         c.shutter = (mode == 3 && !sharpFrame) ? 0.2f + 1.3f * s : 0.0f;
+        // Smooth-blur quality: sample spacing (px), tap limit and dither.
+        static const float kStep[4] = { 2.5f, 1.75f, 1.25f, 0.8f }, kTaps[4] = { 8, 16, 32, 64 };
+        int bq = std::clamp(p.blurQuality, 0, 3);
+        c.tapStep = kStep[bq]; c.maxTaps = kTaps[bq]; c.jitter = bq <= 1 ? 1.0f : 0.0f;
         bool vis = p.visualsOn;
         c.exposure = vis ? p.exposure : 0;
         c.contrast = vis ? p.contrast / 100.0f : 0;
@@ -645,7 +675,7 @@ struct RenderSession {
         if (!curSrv) return Continue;
 
         // Smooth: build the luma pyramid for this frame and estimate motion against the last one.
-        if (mode == 3 && newFrame) {
+        if (mode == 3 && fresh) {
             int lc = lumaCur, lp = lumaCur ^ 1;
             Constants m = c;
             m.srcTexelX = 1.0f / width; m.srcTexelY = 1.0f / height;
@@ -759,6 +789,10 @@ struct RenderSession {
         hr = swap->Present(1, 0);
         if (FAILED(hr)) { LogLine("Present 0x%08x", hr); return Lost; }
         presentedLast = true;
+        if (fpsCap > 0) {
+            LONGLONG period = qpf.QuadPart / fpsCap, slot = qpf.QuadPart / std::max(30, refresh);
+            nextDueT.QuadPart = std::max(nextDueT.QuadPart + period, now.QuadPart + period - slot);
+        }
         ++presents;
         if (!shown) {
             dcomp->Commit();
@@ -779,7 +813,8 @@ struct RenderSession {
         owner->stats_.running = true;
         owner->stats_.fps = presents / since;
         owner->stats_.captureFps = captures / since;
-        owner->stats_.skippedFps = std::max(0.0f, refresh - presents / since);
+        int target = fpsCap > 0 ? std::min(fpsCap, refresh) : refresh;
+        owner->stats_.skippedFps = std::max(0.0f, target - presents / since);
         owner->stats_.gpuMs = presents ? gpuMs : 0.0f;
         owner->stats_.width = width;
         owner->stats_.height = height;

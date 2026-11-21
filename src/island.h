@@ -3,6 +3,8 @@
 #include <string>
 #include <functional>
 
+class ClipboardHistory;
+
 struct IslandSettings {
     bool enabled = false;
     std::string shape = "island";   // island (floating) | notch (attached to the top edge)
@@ -23,7 +25,9 @@ public:
     void ToggleCard();          // Ctrl+Alt+N
     void ToggleMic();           // Ctrl+Alt+M
     void PickColor();           // Ctrl+Alt+P
-    void OpenCard(int tab);     // keeps the card open on a tab (tests / screenshots)
+    void OpenCard(int tab);     // 0 now playing, 1 controls, 2 timer, 3 clipboard, 4 shelf
+    void SetClipboard(ClipboardHistory* c);
+    void ClipboardChanged();
     void Reassert();            // stay above the blur overlay
     HWND Hwnd() const;
     bool noExclude = false;     // debug: let screen capture see the island
