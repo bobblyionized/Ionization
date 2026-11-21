@@ -8,6 +8,7 @@
 #include "updater.h"
 #include "gamemode.h"
 #include "gpuload.h"
+#include "memory.h"
 #include <shellapi.h>
 #include <shobjidl.h>
 #include <shlwapi.h>
@@ -23,7 +24,7 @@ namespace {
 const wchar_t* kPanelClass = strstr(IONIZATION_VERSION, "dev") ? L"IonizationPanelDev" : L"IonizationPanel";
 const wchar_t* kHost = L"https://ionization.local/";
 enum { TIMER_STATS = 1, TIMER_SAVE, TIMER_UPDATE, TIMER_ZORDER, TIMER_DUMP, TIMER_EXIT, TIMER_SHOW,
-       TIMER_GAME, TIMER_RAISECHECK, TIMER_UNLOAD };
+       TIMER_GAME, TIMER_RAISECHECK, TIMER_UNLOAD, TIMER_MEM };
 enum { HK_BLUR = 1, HK_VISUALS, HK_CLOCK };
 enum { IDM_SHOW = 100, IDM_BLUR, IDM_VISUALS, IDM_CLOCK, IDM_ADDGAME, IDM_QUIT };
 #define WM_APP_SHOW (WM_APP + 10)
@@ -46,10 +47,13 @@ bool g_panelTopmost = false;
 std::string g_startView;
 GameMode g_game;
 GpuLoad g_gpuLoad;
+MemoryOptimizer g_mem;
+ULONGLONG g_lastTrim = 0;
 bool g_revealPending = false, g_raiseCheckPending = false;
 HWINEVENTHOOK g_hookFg = nullptr, g_hookReorder = nullptr;
 void CreateWebView();
 void GameTick();
+DWORD ForegroundPid();
 
 // ------------------------------------------------------------------ settings
 
@@ -64,6 +68,7 @@ Json DefaultSettings() {
                 "size": 100, "opacity": 100, "layer": "top", "corner": "tr", "x": 0, "y": 0},
       "display": {"monitor": 0},
       "app": {"autoUpdate": true, "keepPanelSharp": false, "hotkeys": true, "trayHintShown": false},
+      "memory": {"lowPriority": false, "autoTrim": false, "autoTrimAt": 85, "gameBoost": true},
       "perf": {"gameMode": true, "quality": "efficient", "hideClockInGames": true,
                "games": [{"exe": "robloxplayerbeta.exe", "mode": "pause"}, {"exe": "hd-player.exe", "mode": "pause"},
                          {"exe": "minecraft.windows.exe", "mode": "pause"}, {"exe": "cs2.exe", "mode": "pause"},
@@ -301,6 +306,10 @@ std::vector<GameRule> GameRulesFrom(const Json& s) {
     return rules;
 }
 
+void ApplyMemory() {
+    g_mem.SetLowPriority(g_settings.boolean("memory.lowPriority", false), ForegroundPid());
+}
+
 void ApplySettings() {
     g_game.Configure(g_settings.boolean("perf.gameMode", true), GameRulesFrom(g_settings));
     const GameStatus& gs = g_game.Status();
@@ -451,6 +460,7 @@ void Quit() {
     g_renderer.Stop();
     g_clock.Apply(ClockSettings{});
     RemoveTrayIcon();
+    g_mem.RestoreAll();
     if (g_hookFg) UnhookWinEvent(g_hookFg);
     if (g_hookReorder) UnhookWinEvent(g_hookReorder);
     if (g_ctl) g_ctl->Close();
@@ -474,11 +484,43 @@ done:
     SendState();
 }
 
+DWORD ForegroundPid() {
+    DWORD pid = 0;
+    if (HWND fg = GetForegroundWindow()) GetWindowThreadProcessId(fg, &pid);
+    return pid == GetCurrentProcessId() ? 0 : pid;
+}
+
+Json MemJson(const MemorySnapshot& m) {
+    Json j = Json::object();
+    j["total"] = (double)m.total; j["available"] = (double)m.available;
+    j["commit"] = (double)m.commit; j["commitLimit"] = (double)m.commitLimit; j["load"] = m.load;
+    Json top = Json::array();
+    for (auto& a : m.top) {
+        Json o = Json::object();
+        o["exe"] = a.exe; o["ws"] = (double)a.workingSet; o["n"] = a.instances;
+        top.arr.push_back(o);
+    }
+    j["top"] = top;
+    return j;
+}
+
+void ReportTrim(const TrimResult& r, const char* why) {
+    g_lastTrim = GetTickCount64();
+    Json j = Json::object();
+    j["type"] = "memTrimmed";
+    j["freed"] = (double)r.freed; j["trimmed"] = r.trimmed; j["why"] = why;
+    PostToUI(j);
+}
+
 // Game Mode: called every 500 ms and on every foreground change.
 void GameTick() {
     if (!g_game.Tick()) return;
     const GameStatus& gs = g_game.Status();
     if (gs.inGame) LogLine("Game detected: %s (%s) -> %s", gs.exe.c_str(), gs.reason.c_str(), gs.keep ? "keep effects" : "paused");
+    if (gs.inGame && g_settings.boolean("memory.gameBoost", true)) {
+        // Game boost: push background apps out of RAM so the game has room.
+        ReportTrim(g_mem.TrimAll(ForegroundPid(), gs.exe), "game");
+    }
     else LogLine("Game left, effects restored");
     ApplySettings();
     SendGame();
@@ -503,7 +545,10 @@ void RaiseCheck() {
 }
 
 void CALLBACK WinEventProc(HWINEVENTHOOK, DWORD event, HWND, LONG, LONG, DWORD, DWORD) {
-    if (event == EVENT_SYSTEM_FOREGROUND) GameTick();
+    if (event == EVENT_SYSTEM_FOREGROUND) {
+        GameTick();
+        if (g_settings.boolean("memory.lowPriority", false)) ApplyMemory();
+    }
     if (!g_raiseCheckPending && g_renderer.IsRunning()) {
         g_raiseCheckPending = true;
         SetTimer(g_hwnd, TIMER_RAISECHECK, 250, nullptr);   // coalesce bursts of z-order events
@@ -556,9 +601,22 @@ void HandleMessage(const Json& m) {
             DeepMerge(g_settings, *v);
             ApplySettings();
             GameTick();
+            ApplyMemory();
             SaveSoon();
         }
         return;
+    }
+    if (type == "memSnapshot") {
+        Json j = Json::object(); j["type"] = "mem"; j["value"] = MemJson(g_mem.Snapshot(12)); PostToUI(j); return;
+    }
+    if (type == "memTrim") {
+        // The app you were just using (before clicking the panel) is spared.
+        ReportTrim(g_mem.TrimAll(0, g_game.LastForeignExe()), "manual");
+        Json j = Json::object(); j["type"] = "mem"; j["value"] = MemJson(g_mem.Snapshot(12)); PostToUI(j); return;
+    }
+    if (type == "memTrimExe") {
+        ReportTrim(g_mem.TrimExe(m.str("exe", "")), "app");
+        Json j = Json::object(); j["type"] = "mem"; j["value"] = MemJson(g_mem.Snapshot(12)); PostToUI(j); return;
     }
     if (type == "addGame") { AddGameRule(m.str("exe", ""), m.str("mode", "pause") == "keep" ? "keep" : "pause"); return; }
     if (type == "drag") { ReleaseCapture(); SendMessageW(g_hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0); return; }
@@ -831,6 +889,15 @@ LRESULT CALLBACK PanelProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         case TIMER_GAME:
             GameTick();
             break;
+        case TIMER_MEM: {
+            ApplyMemory();
+            if (g_settings.boolean("memory.autoTrim", false) && GetTickCount64() - g_lastTrim > 120000) {
+                MEMORYSTATUSEX ms{ sizeof(ms) };
+                if (GlobalMemoryStatusEx(&ms) && (double)ms.dwMemoryLoad >= g_settings.num("memory.autoTrimAt", 85))
+                    ReportTrim(g_mem.TrimAll(ForegroundPid(), g_game.Status().exe), "auto");
+            }
+            break;
+        }
         case TIMER_RAISECHECK:
             KillTimer(h, TIMER_RAISECHECK);
             g_raiseCheckPending = false;
@@ -897,6 +964,23 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     }
 
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    if (HasArg(argc, argv, L"--mem-test")) {
+        // Self-check of the RAM optimizer on the live system (logs only, then exits).
+        MemoryOptimizer mo;
+        MemorySnapshot a = mo.Snapshot(5);
+        LogLine("memtest: total %.1f GB, available %.2f GB, load %d%%", a.total / 1073741824.0, a.available / 1073741824.0, a.load);
+        for (auto& t : a.top) LogLine("memtest: top %s %.0f MB x%d", t.exe.c_str(), t.workingSet / 1048576.0, t.instances);
+        TrimResult r = mo.TrimAll(ForegroundPid(), "");
+        Sleep(500);
+        MemorySnapshot b = mo.Snapshot(1);
+        LogLine("memtest: trimmed %d processes, working sets -%.0f MB, available %.2f -> %.2f GB",
+            r.trimmed, r.freed / 1048576.0, a.available / 1073741824.0, b.available / 1073741824.0);
+        mo.SetLowPriority(true, ForegroundPid());
+        LogLine("memtest: lowered %zu processes, %d verified LOW", mo.LoweredCount(), mo.VerifyLowered());
+        mo.RestoreAll();
+        LogLine("memtest: after restore %zu tracked", mo.LoweredCount());
+        return 0;
+    }
     Updater::CleanupOldExe();
     EnableDarkMenus();
     LoadSettings();
@@ -969,6 +1053,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
 
     SetTimer(g_hwnd, TIMER_STATS, 500, nullptr);
     SetTimer(g_hwnd, TIMER_GAME, 500, nullptr);
+    SetTimer(g_hwnd, TIMER_MEM, 15000, nullptr);
+    ApplyMemory();
     SetTimer(g_hwnd, TIMER_ZORDER, 2000, nullptr);
     SetTimer(g_hwnd, TIMER_UPDATE, 6 * 60 * 60 * 1000, nullptr);
     // Never check on the launch right after an update (guards against any update loop).

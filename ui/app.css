@@ -146,6 +146,11 @@ kbd {
 .nav .group:first-child { margin-top: 2px; }
 .addrow { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; margin: 14px 0 0; }
 .addrow .btn.ghost:empty { display: none; }
+.membar { margin-top: 14px; height: 8px; border-radius: 99px; background: var(--line); overflow: hidden; }
+.membar i { display: block; height: 100%; width: 0; border-radius: 99px; background: var(--volt); transition: width .7s var(--ease-out); }
+.membar.hot i { background: #f5a23c; }
+.memrow-bar { height: 3px; margin-top: 6px; border-radius: 99px; background: var(--line); overflow: hidden; width: 140px; }
+.memrow-bar i { display: block; height: 100%; background: #8c919a99; border-radius: 99px; }
 .dot.warn { background: #f5a23c; box-shadow: 0 0 0 3px #f5a23c1f; }
 .nav button .pip { margin-left: auto; width: 5px; height: 5px; border-radius: 50%; background: var(--volt); box-shadow: 0 0 8px var(--volt-glow); opacity: 0; transition: opacity .3s; }
 .nav button .pip.on { opacity: 1; }

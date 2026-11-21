@@ -17,6 +17,7 @@ const DEFAULTS = {
   display: { monitor: 0 },
   app: { autoUpdate: true, keepPanelSharp: false, hotkeys: true, trayHintShown: false },
   perf: { gameMode: true, quality: "efficient", hideClockInGames: true, games: [] },
+  memory: { lowPriority: false, autoTrim: false, autoTrimAt: 85, gameBoost: true },
   profiles: [],
   activeProfile: "Clean",
 };
@@ -47,6 +48,8 @@ const state = {
   clockEditing: false,
   game: { inGame: false, keep: false, exe: "", reason: "", lastExe: "" },
   focused: true,
+  mem: null,
+  lastTrim: null,
 };
 
 // ------------------------------------------------------------------ bridge
@@ -94,6 +97,9 @@ function onHost(msg) {
     case "hotkeys": state.hotkeys = msg.value || state.hotkeys; renderShortcuts(); break;
     case "game": state.game = msg.value || state.game; renderPerf(); renderHeader(); renderStats(); break;
     case "focus": state.focused = !!msg.value; if (state.focused) Demo.kick(); break;
+    case "mem": state.mem = msg.value; renderMemory(); break;
+    case "memTrimmed": state.lastTrim = { freed: msg.freed, trimmed: msg.trimmed, why: msg.why, at: Date.now() }; renderMemory();
+      if (msg.why !== "auto") toast(`Freed ${fmtBytes(msg.freed)} from ${msg.trimmed} processes`, "ok"); break;
   }
 }
 if (host) host.addEventListener("message", (e) => onHost(e.data));
@@ -656,6 +662,61 @@ function addGame(exe) {
   toast(`${gameName(exe)} added to Game Mode`, "ok");
 }
 
+// ------------------------------------------------------------------ memory
+const GB = 1024 * 1024 * 1024;
+function fmtBytes(b) { return b >= GB ? (b / GB).toFixed(1) + " GB" : Math.round(b / 1048576) + " MB"; }
+function renderMemory() {
+  const m = state.mem;
+  if (!m) return;
+  const used = m.total - m.available;
+  $("#mUsed").textContent = (used / GB).toFixed(1);
+  $("#mTotal").textContent = `of ${(m.total / GB).toFixed(1)} GB`;
+  const lc = $("#mLoadChip");
+  lc.className = "delta" + (m.load >= 85 ? " bad" : "");
+  lc.innerHTML = `<span>${m.load}%</span>`;
+  $("#mAvail").textContent = (m.available / GB).toFixed(1);
+  $("#mCommit").textContent = (m.commit / GB).toFixed(1);
+  $("#mCommitChip").textContent = m.commitLimit ? Math.round((m.commit / m.commitLimit) * 100) + "%" : "-";
+  $("#mCommitLimit").textContent = `of ${(m.commitLimit / GB).toFixed(1)} GB limit`;
+  $("#memBar").classList.toggle("hot", m.load >= 85);
+  $("#memBarFill").style.width = m.load + "%";
+  const t = state.lastTrim;
+  $("#mFreed").textContent = t ? Math.round(t.freed / 1048576) : 0;
+  $("#mFreedChip").textContent = t ? `${t.trimmed} apps` : "not yet";
+  $("#mFreedChip").className = "delta" + (t ? "" : " mute");
+  $("#mFreedWhen").textContent = t ? `${t.why === "game" ? "game boost" : t.why === "auto" ? "automatic" : "just now"}, ${timeAgo(t.at)}` : "press Free up RAM";
+  $("[data-pip=memory]").classList.toggle("on", m.load >= 85);
+  const list = $("#memList");
+  list.innerHTML = "";
+  const max = m.top.length ? m.top[0].ws : 1;
+  for (const a of m.top) {
+    const li = document.createElement("li");
+    li.innerHTML = `<div style="min-width:0"><p class="t" style="margin:0">${escapeHtml(prettyExe(a.exe))}</p>
+        <p class="s" style="margin:2px 0 0">${escapeHtml(a.exe)}${a.n > 1 ? ` · ${a.n} processes` : ""}</p>
+        <div class="memrow-bar"><i style="width:${Math.max(3, (a.ws / max) * 100)}%"></i></div></div>
+      <div class="r" style="display:flex;align-items:center;gap:10px;grid-auto-flow:column"><span class="amt">${fmtBytes(a.ws)}</span>
+        <button class="btn ghost sm" data-exe="${escapeHtml(a.exe)}">Trim</button></div>`;
+    $("button", li).addEventListener("click", (e) => send("memTrimExe", { exe: e.currentTarget.dataset.exe }));
+    list.appendChild(li);
+  }
+}
+function prettyExe(exe) {
+  const known = { "msedgewebview2.exe": "WebView2 (app panels)", "msedge.exe": "Microsoft Edge", "chrome.exe": "Google Chrome",
+    "firefox.exe": "Firefox", "discord.exe": "Discord", "claude.exe": "Claude", "code.exe": "VS Code", "explorer.exe": "File Explorer",
+    "robloxplayerbeta.exe": "Roblox", "spotify.exe": "Spotify", "steam.exe": "Steam", "steamwebhelper.exe": "Steam (web helper)",
+    "searchhost.exe": "Windows Search", "msmpeng.exe": "Defender", "hd-player.exe": "BlueStacks" };
+  return known[exe] || exe.replace(/\.exe$/i, "");
+}
+function timeAgo(t) {
+  const s = Math.round((Date.now() - t) / 1000);
+  return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : `${Math.round(s / 3600)}h ago`;
+}
+let memTimer = 0;
+function memPolling(on) {
+  clearInterval(memTimer);
+  if (on) { send("memSnapshot"); memTimer = setInterval(() => send("memSnapshot"), 2000); }
+}
+
 // ------------------------------------------------------------------ all
 function syncBinds() {
   $$("input[type=checkbox][data-bind]").forEach((el) => { el.checked = !!get(el.dataset.bind); });
@@ -726,6 +787,7 @@ function build() {
     { path: "fx.grain", label: "Film grain", min: 0, max: 100, step: 1, unit: "%", def: 0 },
     { path: "fx.warmth", label: "Night warmth", min: 0, max: 100, step: 1, unit: "%", def: 0, hint: "cuts blue light" },
   ]);
+  rows("#memRows", [{ path: "memory.autoTrimAt", label: "Free up at", min: 60, max: 95, step: 1, unit: "%", def: 85, hint: "RAM in use" }]);
   rows("#clockRows", [
     { path: "clock.size", label: "Size", min: 50, max: 200, step: 1, unit: "%", def: 100 },
     { path: "clock.opacity", label: "Opacity", min: 10, max: 100, step: 1, unit: "%", def: 100 },
@@ -738,6 +800,7 @@ function build() {
   $$("#qualitySeg button").forEach((b) => b.addEventListener("click", () => set("perf.quality", b.dataset.v)));
   $("#addGameForm").addEventListener("submit", (e) => { e.preventDefault(); addGame($("#addGameExe").value); $("#addGameExe").value = ""; });
   $("#addLastGame").addEventListener("click", () => addGame(state.game.lastExe));
+  $("#memTrimBtn").addEventListener("click", () => { $("#memTrimBtn").disabled = true; send("memTrim"); setTimeout(() => ($("#memTrimBtn").disabled = false), 1500); });
 
   $$("#nav button").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view)));
   $$("#modeTabs button").forEach((b) => b.addEventListener("click", () => set("blur.mode", b.dataset.mode)));
@@ -798,6 +861,7 @@ function showView(v) {
     placeTabBar($("#modeTabs"));
     if (v === "blur") { drawChart(); Demo.kick(); }
     if (v === "profiles") renderProfiles();
+    memPolling(v === "memory");
     schedulePreviews();
   });
 }
@@ -938,6 +1002,12 @@ const Mock = {
         const hz = (state.monitors[state.settings.display.monitor] || {}).refresh || 60;
         onHost({ type: "stats", running: on, fps: on ? hz - Math.random() * 0.6 : 0, captureFps: on ? hz * (0.55 + Math.random() * 0.3) : 0, gpuMs: on ? 0.9 + Math.random() * 0.25 : 0, width: 2560, height: 1440, refresh: hz });
       }, 500);
+    } else if (m.type === "memSnapshot" || m.type === "memTrim" || m.type === "memTrimExe") {
+      const total = 7.8 * GB, avail = (m.type === "memSnapshot" ? 1.6 : 2.7) * GB;
+      if (m.type !== "memSnapshot") onHost({ type: "memTrimmed", freed: 1.1 * GB, trimmed: 41, why: "manual" });
+      onHost({ type: "mem", value: { total, available: avail, commit: 9.4 * GB, commitLimit: 12.6 * GB, load: Math.round((1 - avail / total) * 100),
+        top: [["claude.exe", 1.2, 9], ["robloxplayerbeta.exe", 0.95, 1], ["msedgewebview2.exe", 0.35, 12], ["discord.exe", 0.31, 6], ["explorer.exe", 0.18, 1], ["searchhost.exe", 0.12, 1]]
+          .map(([exe, g, n]) => ({ exe, ws: g * GB, n })) } });
     } else if (m.type === "checkUpdate") {
       onHost({ type: "update", value: { status: "dev" } });
     } else if (m.type === "clockEdit") {
