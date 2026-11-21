@@ -238,6 +238,19 @@ void ApplyHotkeys() {
     g_hotkeysOk[HK_CLOCK] = RegisterHotKey(g_hwnd, HK_CLOCK, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'C') != 0;
 }
 
+void UpdateTrayTip() {
+    NOTIFYICONDATAW nid{ sizeof(nid) };
+    nid.hWnd = g_hwnd; nid.uID = 1; nid.uFlags = NIF_TIP | NIF_SHOWTIP;
+    std::wstring tip = L"Ionization
+Motion blur ";
+    tip += g_settings.boolean("blur.enabled", true) ? L"on" : L"off";
+    tip += L", color ";
+    tip += g_settings.boolean("visuals.enabled", true) ? L"on" : L"off";
+    if (g_settings.boolean("clock.enabled", false)) tip += L", clock on";
+    wcsncpy_s(nid.szTip, tip.c_str(), _TRUNCATE);
+    Shell_NotifyIconW(NIM_MODIFY, &nid);
+}
+
 void ApplySettings() {
     EffectParams p = ParamsFrom(g_settings);
     g_renderer.SetParams(p);
@@ -254,6 +267,7 @@ void ApplySettings() {
         g_clock.Apply(ClockFrom(g_settings));
     }
     ApplyPanelSharp();
+    UpdateTrayTip();
 }
 
 void ToggleSetting(const char* section, const char* key) {
