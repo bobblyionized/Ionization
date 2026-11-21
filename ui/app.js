@@ -20,6 +20,7 @@ const DEFAULTS = {
   memory: { lowPriority: false, autoTrim: false, autoTrimAt: 85, gameBoost: true },
   island: { enabled: false, shape: "island", theme: "black", size: 100, hidden: false, volumeOsd: true },
   clipboard: { enabled: false, max: 60 },
+  desktop: { hideIcons: false, hiddenByUs: false },
   wallpaper: { enabled: false, source: "shader", shader: "aurora", speed: 100, dim: 0, fps: 30, image: "", video: "", pan: true, displays: "all", pauseBattery: true },
   widgets: { layer: "desktop", theme: "glass", units: "c", hour24: true, size: 100,
     weather: { on: false, x: -1, y: -1, place: "", lat: 0, lon: 0 },
@@ -375,6 +376,7 @@ function renderShortcuts() {
     ["Motion blur", "B", "blur", "blur.enabled"],
     ["Color & effects", "V", "visuals", "visuals.enabled"],
     ["Desktop clock", "C", "clock", "clock.enabled"],
+    ["Hide desktop icons", "D", "icons", "desktop.hideIcons"],
   ];
   $("#hkList").innerHTML = rows.map(([name, key, id, path]) => {
     const ok = state.hotkeys[id];
@@ -882,6 +884,12 @@ function renderWallpaper() {
   $("#wpVideoName").textContent = W.video ? baseName(W.video) : "No video chosen";
   $("#wpVideoPath").textContent = W.video || "MP4 (H.264 or HEVC), MOV or WMV. Plays muted and loops, decoded on the GPU";
   renderWallpaperStatus();
+  const tag = $("#iconsKeyTag");
+  if (tag) {
+    const hk = state.settings.app.hotkeys;
+    tag.textContent = !hk ? "disabled" : state.hotkeys.icons === false ? "in use" : (state.settings.desktop.hideIcons ? "hidden" : "ready");
+    tag.className = "tag" + (!hk ? " dim" : state.hotkeys.icons === false ? " warn" : "");
+  }
 }
 
 // ------------------------------------------------------------------ island
@@ -1026,7 +1034,7 @@ function refreshFor(section) {
   if (section === "blur") renderQuality();
   if (section === "clipboard") renderClipboard();
   if (section === "widgets") renderWidgets();
-  if (section === "wallpaper") renderWallpaper();
+  if (section === "wallpaper" || section === "desktop") renderWallpaper();
 }
 function renderAll() {
   syncBinds();

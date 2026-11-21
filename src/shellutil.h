@@ -18,4 +18,7 @@ namespace ShellUtil {
     HBITMAP Icon(const std::wstring& parsingName, int size);   // caller DeleteObject()s
     void Launch(const std::wstring& parsingName);
     void SendKeys(std::initializer_list<WORD> vks);  // e.g. { VK_LWIN, 'A' }
+    // Desktop icons: the same switch as right-click desktop > View > Show desktop icons.
+    bool DesktopIconsVisible();
+    bool SetDesktopIcons(bool visible);
 }

@@ -15,6 +15,7 @@
 #include "clipboard.h"
 #include "widgets.h"
 #include "wallpaper.h"
+#include "shellutil.h"
 #include "net.h"
 #include <thread>
 #include <shellapi.h>
@@ -33,9 +34,9 @@ const wchar_t* kPanelClass = strstr(IONIZATION_VERSION, "dev") ? L"IonizationPan
 const wchar_t* kHost = L"https://ionization.local/";
 enum { TIMER_STATS = 1, TIMER_SAVE, TIMER_UPDATE, TIMER_ZORDER, TIMER_DUMP, TIMER_EXIT, TIMER_SHOW,
        TIMER_GAME, TIMER_RAISECHECK, TIMER_UNLOAD, TIMER_MEM, TIMER_MACRO, TIMER_RECTEST };
-enum { HK_BLUR = 1, HK_VISUALS, HK_CLOCK, HK_MIC, HK_CARD, HK_PICK, HK_CLIP };
+enum { HK_BLUR = 1, HK_VISUALS, HK_CLOCK, HK_MIC, HK_CARD, HK_PICK, HK_CLIP, HK_ICONS };
 const ULONG_PTR kCopyIsland = 0x49534C44;   // WM_COPYDATA tag for `Ionization.exe --island "text"`
-enum { IDM_SHOW = 100, IDM_BLUR, IDM_VISUALS, IDM_CLOCK, IDM_ADDGAME, IDM_QUIT };
+enum { IDM_SHOW = 100, IDM_BLUR, IDM_VISUALS, IDM_CLOCK, IDM_ADDGAME, IDM_QUIT, IDM_ICONS };
 #define WM_APP_SHOW (WM_APP + 10)
 
 HWND g_hwnd = nullptr;
@@ -94,6 +95,7 @@ Json DefaultSettings() {
                "pins": [], "imported": false, "tbHidden": false, "tbOrig": 0},
       "island": {"enabled": false, "shape": "island", "theme": "black", "size": 100, "hidden": false, "volumeOsd": true},
       "clipboard": {"enabled": false, "max": 60},
+      "desktop": {"hideIcons": false, "hiddenByUs": false},
       "wallpaper": {"enabled": false, "source": "shader", "shader": "aurora", "speed": 100, "dim": 0, "fps": 30,
                     "image": "", "video": "", "pan": true, "displays": "all", "pauseBattery": true},
       "widgets": {"layer": "desktop", "theme": "glass", "units": "c", "hour24": true, "size": 100,
@@ -261,6 +263,7 @@ Json HotkeysJson() {
     h["blur"] = g_hotkeysOk[HK_BLUR];
     h["visuals"] = g_hotkeysOk[HK_VISUALS];
     h["clock"] = g_hotkeysOk[HK_CLOCK];
+    h["icons"] = g_hotkeysOk[HK_ICONS];
     h["mic"] = g_hotkeysOk[HK_MIC];
     h["card"] = g_hotkeysOk[HK_CARD];
     h["pick"] = g_hotkeysOk[HK_PICK];
@@ -287,6 +290,10 @@ void SendGame() {
 }
 
 void SendInit() {
+    // Icons shown again from Windows' own menu? Then our option is off too.
+    if (g_settings.boolean("desktop.hiddenByUs", false) && ShellUtil::DesktopIconsVisible()) {
+        g_settings["desktop"]["hideIcons"] = false; g_settings["desktop"]["hiddenByUs"] = false; SaveSoon();
+    }
     Json j = Json::object();
     j["type"] = "init";
     j["settings"] = g_settings;
@@ -336,11 +343,12 @@ void ApplyPanelSharp() {
 }
 
 void ApplyHotkeys() {
-    for (int i = 1; i <= 3; ++i) { UnregisterHotKey(g_hwnd, i); g_hotkeysOk[i] = false; }
+    for (int i : { (int)HK_BLUR, (int)HK_VISUALS, (int)HK_CLOCK, (int)HK_ICONS }) { UnregisterHotKey(g_hwnd, i); g_hotkeysOk[i] = false; }
     if (!g_settings.boolean("app.hotkeys", true)) return;
     g_hotkeysOk[HK_BLUR] = RegisterHotKey(g_hwnd, HK_BLUR, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'B') != 0;
     g_hotkeysOk[HK_VISUALS] = RegisterHotKey(g_hwnd, HK_VISUALS, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'V') != 0;
     g_hotkeysOk[HK_CLOCK] = RegisterHotKey(g_hwnd, HK_CLOCK, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'C') != 0;
+    g_hotkeysOk[HK_ICONS] = RegisterHotKey(g_hwnd, HK_ICONS, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'D') != 0;
 }
 
 void UpdateTrayTip() {
@@ -493,6 +501,19 @@ void PickWallpaperFile(const std::string& kind) {
     ApplySettings(); SaveSoon(); SendState();
 }
 
+// Hide or show desktop icons. Only icons we hid get shown again, so a desktop that was
+// already icon-free in Windows stays that way when the option is turned off.
+void ApplyDesktopIcons() {
+    bool want = g_settings.boolean("desktop.hideIcons", false);
+    bool ours = g_settings.boolean("desktop.hiddenByUs", false);
+    if (want && !ours && ShellUtil::DesktopIconsVisible()) {
+        if (ShellUtil::SetDesktopIcons(false)) { g_settings["desktop"]["hiddenByUs"] = true; SaveSoon(); LogLine("Desktop icons hidden"); }
+    } else if (!want && ours) {
+        ShellUtil::SetDesktopIcons(true);
+        g_settings["desktop"]["hiddenByUs"] = false; SaveSoon(); LogLine("Desktop icons shown");
+    }
+}
+
 void ApplyWidgets() {
     Json key = Json::object();
     if (const Json* w = g_settings.find("widgets")) key["w"] = *w;
@@ -550,6 +571,7 @@ void ApplySettings() {
     ApplyClipboard();
     ApplyWidgets();
     ApplyWallpaper();
+    ApplyDesktopIcons();
     UpdateTrayTip();
 }
 
@@ -655,6 +677,7 @@ void ShowTrayMenu() {
     AppendMenuW(m, MF_STRING | (g_settings.boolean("blur.enabled", true) ? MF_CHECKED : 0), IDM_BLUR, L"Motion blur\tCtrl+Alt+B");
     AppendMenuW(m, MF_STRING | (g_settings.boolean("visuals.enabled", true) ? MF_CHECKED : 0), IDM_VISUALS, L"Color && effects\tCtrl+Alt+V");
     AppendMenuW(m, MF_STRING | (g_settings.boolean("clock.enabled", false) ? MF_CHECKED : 0), IDM_CLOCK, L"Clock\tCtrl+Alt+C");
+    AppendMenuW(m, MF_STRING | (g_settings.boolean("desktop.hideIcons", false) ? MF_CHECKED : 0), IDM_ICONS, L"Hide desktop icons\tCtrl+Alt+D");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     std::string last = g_game.LastForeignExe();
     if (!last.empty()) {
@@ -684,6 +707,10 @@ void Quit() {
     g_island.Apply(IslandSettings{}, false);
     g_widgets.Apply(Json::object(), false);
     g_wallpaper.Apply(WallpaperSettings{}, false);   // gives the desktop back to Explorer
+    if (g_settings.boolean("desktop.hiddenByUs", false)) {   // icons come back while Ionization isn't running
+        ShellUtil::SetDesktopIcons(true);
+        g_settings["desktop"]["hiddenByUs"] = false;
+    }
     g_clip.Enable(false, 60);   // saves the history
     g_settings["dock"]["tbHidden"] = false;
     SaveSettingsNow();
@@ -1130,6 +1157,7 @@ LRESULT CALLBACK PanelProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         if (w == HK_BLUR) ToggleSetting("blur", "enabled");
         else if (w == HK_VISUALS) ToggleSetting("visuals", "enabled");
         else if (w == HK_CLOCK) ToggleSetting("clock", "enabled");
+        else if (w == HK_ICONS) ToggleSetting("desktop", "hideIcons");
         else if (w == HK_MIC) g_island.ToggleMic();
         else if (w == HK_CARD) g_island.ToggleCard();
         else if (w == HK_PICK) g_island.PickColor();
@@ -1164,6 +1192,7 @@ LRESULT CALLBACK PanelProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         case IDM_BLUR: ToggleSetting("blur", "enabled"); break;
         case IDM_VISUALS: ToggleSetting("visuals", "enabled"); break;
         case IDM_CLOCK: ToggleSetting("clock", "enabled"); break;
+        case IDM_ICONS: ToggleSetting("desktop", "hideIcons"); break;
         case IDM_ADDGAME: AddGameRule(g_game.LastForeignExe(), "pause"); break;
         case IDM_QUIT: Quit(); break;
         }

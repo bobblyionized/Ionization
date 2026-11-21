@@ -141,4 +141,33 @@ void SendKeys(std::initializer_list<WORD> vks) {
     SendInput((UINT)in.size(), in.data(), sizeof(INPUT));
 }
 
+
+static HWND DesktopDefView() {
+    HWND progman = FindWindowW(L"Progman", nullptr);
+    HWND dv = progman ? FindWindowExW(progman, nullptr, L"SHELLDLL_DefView", nullptr) : nullptr;   // 24H2+ layout
+    if (!dv) {
+        EnumWindows([](HWND h, LPARAM lp) -> BOOL {
+            HWND d = FindWindowExW(h, nullptr, L"SHELLDLL_DefView", nullptr);
+            if (d) { *(HWND*)lp = d; return FALSE; }
+            return TRUE;
+        }, (LPARAM)&dv);
+    }
+    return dv;
+}
+
+bool DesktopIconsVisible() {
+    HWND dv = DesktopDefView();
+    HWND lv = dv ? FindWindowExW(dv, nullptr, L"SysListView32", nullptr) : nullptr;
+    return lv ? IsWindowVisible(lv) != 0 : true;
+}
+
+bool SetDesktopIcons(bool visible) {
+    if (DesktopIconsVisible() == visible) return true;
+    HWND dv = DesktopDefView();
+    if (!dv) return false;
+    DWORD_PTR r = 0;
+    // 0x7402 is Explorer's own "Show desktop icons" toggle, so its menu and setting stay in sync.
+    SendMessageTimeoutW(dv, WM_COMMAND, 0x7402, 0, SMTO_ABORTIFHUNG, 2000, &r);
+    return DesktopIconsVisible() == visible;
+}
 } // namespace ShellUtil

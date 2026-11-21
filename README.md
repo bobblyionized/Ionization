@@ -33,7 +33,8 @@ A visual changer for Windows 11, built around screen-wide, CapCut-style motion b
 - **Dock**: a floating, magnifying dock that replaces the Windows taskbar and gives it back when turned off.
 - **Memory** and **Macros**: background RAM trimming, plus a keyboard and mouse macro recorder and player.
 - **Profiles**: Clean, Cinematic, Dreamy, Retro, Night, and your own saved looks.
-- **Hotkeys**: `Ctrl+Alt+B` toggles blur, `Ctrl+Alt+V` toggles color and effects, `Ctrl+Alt+C` toggles the clock. A tray icon is always there too.
+- **Hide desktop icons** for a clean wallpaper (`Ctrl+Alt+D` or the tray menu). It uses Windows' own "Show desktop icons" switch, and the icons come back when you quit.
+- **Hotkeys**: `Ctrl+Alt+B` toggles blur, `Ctrl+Alt+V` toggles color and effects, `Ctrl+Alt+C` toggles the clock, `Ctrl+Alt+D` hides or shows desktop icons. A tray icon is always there too.
 
 ## How it works
 
