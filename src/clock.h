@@ -24,6 +24,7 @@ public:
     HWND Hwnd() const { return hwnd_; }
     // Called when the user finishes dragging the clock in edit mode.
     std::function<void(int x, int y)> onMoved;
+    bool noExclude = false;   // debug: allow screenshots of the clock
     void Tick();
     // Re-apply z-order (topmost above the blur overlay, or just above the desktop).
     void Reassert();

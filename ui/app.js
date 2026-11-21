@@ -129,9 +129,9 @@ function makeSlider(host, o) {
   const signed = o.min < 0;
   row.innerHTML = o.hero
     ? `<input type="range" id="${id}" min="${o.min}" max="${o.max}" step="${o.step}" aria-label="${o.label}">`
-    : `<div class="top"><span class="name" title="Double-click to reset">${o.label}</span><span class="hint mono" style="font-size:11px">${o.hint || ""}</span></div>
-       <div class="ctrl"><input type="range" id="${id}" min="${o.min}" max="${o.max}" step="${o.step}" aria-label="${o.label}"${signed ? ' class="center"' : ""}>
-       <label class="numbox"><input inputmode="decimal" spellcheck="false" aria-label="${o.label} value"><span class="unit">${o.unit || ""}</span></label></div>`;
+    : `<div class="top"><span class="lab"><span class="name" title="Double-click to reset">${o.label}</span>${o.hint ? `<span class="sub">${o.hint}</span>` : ""}</span>
+       <label class="numbox"><input inputmode="decimal" spellcheck="false" aria-label="${o.label} value"><span class="unit">${o.unit || ""}</span></label></div>
+       <input type="range" id="${id}" min="${o.min}" max="${o.max}" step="${o.step}" aria-label="${o.label}"${signed ? ' class="center"' : ""}>`;
   let box;
   if (o.hero) {
     host.appendChild(row.firstElementChild);
@@ -157,10 +157,10 @@ function makeSlider(host, o) {
       range.classList.toggle("hot", !!o.hero || Math.abs(v - def) > 1e-9);
     },
   };
-  range.addEventListener("input", () => { set(o.path, Number(range.value)); s.update(); });
+  range.addEventListener("input", () => { set(o.path, Number(fmtNum(Number(range.value), o.step))); s.update(); });
   const commit = () => {
     const raw = parseFloat(num.value.replace(/[^\d.+-]/g, ""));
-    if (!isNaN(raw)) set(o.path, clamp(Math.round(raw / o.step) * o.step, o.min, o.max));
+    if (!isNaN(raw)) set(o.path, clamp(Number(fmtNum(Math.round(raw / o.step) * o.step, o.step)), o.min, o.max));
     s.update();
   };
   num.addEventListener("change", commit);
@@ -240,9 +240,15 @@ function renderBlur() {
     $("#kShutterNote").textContent = `${Math.round((n * 1000) / hz)} ms window`;
   }
   $("#heroVal").textContent = Math.round(b.strength) + "%";
+  const presetName = { 18: "Subtle", 40: "Smooth", 65: "Cinematic", 90: "Max" }[b.strength];
+  $("#kPreset").textContent = presetName ? presetName.toLowerCase() + " preset" : "custom";
   const hc = $("#heroChip");
   hc.className = "delta" + (on ? "" : " mute");
-  hc.innerHTML = on ? `${svgUse("i-up", 10)}<span>on</span>` : `<span>paused</span>`;
+  hc.innerHTML = on ? `${svgUse("i-pulse", 10)}<span>live</span>` : `<span>paused</span>`;
+  const cmd = $("#cmdBlur");
+  cmd.classList.toggle("on", !!b.enabled);
+  $("#cmdLabel").textContent = b.enabled ? "Motion blur is on" : "Motion blur is off";
+  Demo.kick();
   $("#heroSub").textContent = b.mode === "trail" ? `trail, ${Math.round(trailTau(b.strength) * 1000)} ms` : `blend, ${blendN(b.strength)} frames`;
   $("#compareLbl").textContent = b.mode === "trail" ? "Compare frame blend" : "Compare trail";
   $("#bTrail").textContent = Math.round(b.strength) + "%";
@@ -297,7 +303,7 @@ function drawChart() {
   const curD = smooth(cur, b.mode === "blend");
   const otherD = smooth(other, b.mode !== "blend");
   const area = `${curD} L${X(cur.at(-1)[0])},${top + h} L${X(0)},${top + h} Z`;
-  const grid = [0.25, 0.5, 0.75, 1].map((f) => {
+  const grid = [0.5, 1].map((f) => {
     const y = top + h - f * h * 0.92;
     return `<line class="gridline" x1="0" x2="${w}" y1="${y}" y2="${y}"/><text class="axis" x="${w + 10}" y="${y + 4}">${Math.round(maxW * f * 100)}%</text>`;
   }).join("");
@@ -391,7 +397,7 @@ function schedulePreviews() {
       if (c.exposure) parts.push(`${c.exposure > 0 ? "+" : ""}${c.exposure.toFixed(2)} EV`);
       if (c.saturation !== 100) parts.push(`sat ${c.saturation}%`);
       if (c.temperature) parts.push(`temp ${c.temperature > 0 ? "+" : ""}${c.temperature}`);
-      $("#colorCap").textContent = "before / after" + (parts.length ? " · " + parts.join(" · ") : "");
+      $("#colorCap").textContent = parts.length ? "After, " + parts.join(", ") : "After";
     }
     if (view === "fx") Looks.render($("#fxPreview"), S, { split: 0.5 });
     if (view === "luts") Looks.render($("#lutPreview"), S, { split: 0.5 });
@@ -419,8 +425,13 @@ function renderLuts() {
     const active = l.id === cur;
     li.innerHTML = `<div class="lead"><span class="swatch"><canvas width="52" height="32"></canvas></span>
       <div style="min-width:0"><p class="t" style="margin:0">${escapeHtml(l.name)}</p><p class="s" style="margin:2px 0 0">${l.size ? l.size + "³" : "identity"} · ${l.kind}</p></div></div>
-      <div class="r">${active ? `<span class="tag">active</span>` : `<span class="tag dim">apply</span>`}</div>`;
-    li.addEventListener("click", () => { set("lut.id", l.id); renderLuts(); });
+      <div class="r">${active ? `<span class="tag">active</span>` : ""}</div>`;
+    li.tabIndex = 0;
+    li.setAttribute("role", "button");
+    li.setAttribute("aria-pressed", active ? "true" : "false");
+    const pick = () => { set("lut.id", l.id); renderLuts(); };
+    li.addEventListener("click", pick);
+    li.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
     list.appendChild(li);
     const cv = $("canvas", li);
     if (l.kind === "built-in") lutSwatch(cv, l.id);
@@ -518,6 +529,12 @@ function renderProfiles() {
     grid.appendChild(el);
     requestAnimationFrame(() => Looks.render($("canvas", el), profileSettings(p)));
   }
+  if (!(state.settings.profiles || []).length) {
+    const e = document.createElement("div");
+    e.className = "pcard empty";
+    e.innerHTML = `<div><span class="n" style="font-size:13px;color:var(--fg-2)">Your looks</span><p>Tune blur, color and effects, then name it above to save it here.</p></div>`;
+    grid.appendChild(e);
+  }
   renderHeader();
 }
 
@@ -541,7 +558,7 @@ function renderMonitors() {
 }
 
 function renderUpdate() {
-  const u = state.update || {};
+  const u = state.update || (state.dev ? { status: "dev" } : {});
   $("#aboutVer").textContent = state.dev ? "dev build" : "v" + state.version;
   const chip = $("#updChip");
   const prog = $("#updProg");
@@ -609,7 +626,7 @@ function build() {
   makeSlider($("#heroSlider"), { path: "blur.strength", label: "Blur strength", min: 0, max: 100, step: 1, unit: "%", def: 45, hero: true });
   const rows = (host, defs) => defs.forEach((d) => makeSlider($(host), d));
   rows("#colorRows", [
-    { path: "color.exposure", label: "Exposure", min: -2, max: 2, step: 0.05, unit: "EV", def: 0, hint: "stops" },
+    { path: "color.exposure", label: "Exposure", min: -2, max: 2, step: 0.05, unit: "EV", def: 0 },
     { path: "color.contrast", label: "Contrast", min: -100, max: 100, step: 1, unit: "", def: 0 },
     { path: "color.saturation", label: "Saturation", min: 0, max: 200, step: 1, unit: "%", def: 100 },
     { path: "color.vibrance", label: "Vibrance", min: -100, max: 100, step: 1, unit: "", def: 0, hint: "protects saturated colors" },
@@ -641,6 +658,7 @@ function build() {
   $$("input[type=checkbox][data-bind]").forEach((el) => el.addEventListener("change", () => set(el.dataset.bind, el.checked)));
   $("#autostartToggle").addEventListener("change", (e) => send("autostart", { value: e.target.checked }));
   $("#compareToggle").addEventListener("change", drawChart);
+  $("#cmdBlur").addEventListener("click", () => set("blur.enabled", !get("blur.enabled")));
 
   $$("#nav button").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view)));
   $$("#modeTabs button").forEach((b) => b.addEventListener("click", () => set("blur.mode", b.dataset.mode)));
@@ -699,10 +717,123 @@ function showView(v) {
   requestAnimationFrame(() => {
     $$(".seg").forEach(placeIndicator);
     placeTabBar($("#modeTabs"));
-    if (v === "blur") drawChart();
+    if (v === "blur") { drawChart(); Demo.kick(); }
     schedulePreviews();
   });
 }
+
+// ------------------------------------------------------------------ live blur preview
+// Renders a small scene (a window being dragged, a page scrolling, a fast orb) and
+// blurs it with the same weights the GPU uses: exponential for trail, box for blend.
+// Frames are re-averaged from a ring every tick, so there is no 8-bit ghosting.
+const Demo = {
+  ring: [], max: 32, head: 0, filled: 0, raf: 0, last: 0, t: 0, w: 0, h: 0, dpr: 1,
+  reduce: window.matchMedia("(prefers-reduced-motion: reduce)"),
+  kick() { if (!this.raf) this.raf = requestAnimationFrame((ts) => this.frame(ts)); },
+  active() { const v = $(".view.active"); return !document.hidden && v && v.dataset.view === "blur"; },
+  resize() {
+    const c = $("#demoCanvas");
+    const r = c.getBoundingClientRect();
+    const dpr = Math.min(1.5, window.devicePixelRatio || 1);
+    const w = Math.round(r.width * dpr), h = Math.round(r.height * dpr);
+    if (!w || !h) return false;
+    if (w !== this.w || h !== this.h) {
+      this.w = c.width = w; this.h = c.height = h; this.dpr = dpr;
+      this.ring = []; this.filled = 0; this.head = 0;
+    }
+    return true;
+  },
+  cardX(t, W) { return W * 0.56 + Math.sin(t * 1.5) * W * 0.27; },
+  scene(g, t) {
+    const d = this.dpr, W = this.w / d, H = this.h / d;
+    g.setTransform(d, 0, 0, d, 0, 0);
+    g.fillStyle = "#0a0b0d"; g.fillRect(0, 0, W, H);
+    g.strokeStyle = "rgba(255,255,255,0.035)"; g.lineWidth = 1;
+    g.beginPath();
+    for (let x = 0.5; x < W; x += 24) { g.moveTo(x, 0); g.lineTo(x, H); }
+    for (let y = 0.5; y < H; y += 24) { g.moveTo(0, y); g.lineTo(W, y); }
+    g.stroke();
+    // A page scrolling in the left column.
+    const off = (t * 110) % 26;
+    g.fillStyle = "#15171b"; rr(g, 16, 14, 150, H - 28, 7); g.fill();
+    g.save(); rr(g, 16, 14, 150, H - 28, 7); g.clip();
+    for (let i = -1; i < 9; i++) {
+      const y = 26 + i * 26 - off;
+      const k = (i + Math.floor(t * 110 / 26)) % 5;
+      g.fillStyle = k === 0 ? "#f3f4f6" : "#5d626b";
+      rr(g, 28, y, k === 0 ? 70 : 110 - k * 12, 5, 2.5); g.fill();
+      if (k === 2) { g.fillStyle = "#2b2e35"; rr(g, 28, y + 9, 120, 9, 3); g.fill(); }
+    }
+    g.restore();
+    // A fast orb on a figure-eight.
+    const ox = W * 0.62 + Math.cos(t * 2.6) * W * 0.3, oy = H * 0.5 + Math.sin(t * 5.2) * H * 0.3;
+    g.fillStyle = "#d4f53c"; g.beginPath(); g.arc(ox, oy, 9, 0, Math.PI * 2); g.fill();
+    // A window being dragged.
+    const cx = this.cardX(t, W), cy = H * 0.5 - 40;
+    g.fillStyle = "#15171b"; rr(g, cx - 80, cy, 160, 82, 9); g.fill();
+    g.strokeStyle = "#2b2e35"; rr(g, cx - 79.5, cy + 0.5, 159, 81, 8.5); g.stroke();
+    g.fillStyle = "#d4f53c"; rr(g, cx - 66, cy + 14, 18, 18, 5); g.fill();
+    g.fillStyle = "#f3f4f6"; rr(g, cx - 40, cy + 16, 82, 5, 2.5); g.fill();
+    g.fillStyle = "#8c919a"; rr(g, cx - 40, cy + 26, 56, 4, 2); g.fill();
+    g.fillStyle = "#3d8bfd"; rr(g, cx - 66, cy + 50, 60, 18, 5); g.fill();
+    g.fillStyle = "#2b2e35"; rr(g, cx + 2, cy + 50, 60, 18, 5); g.fill();
+    function rr(g, x, y, w, h, r) { g.beginPath(); g.roundRect(x, y, w, h, r); }
+  },
+  cursor(g, t) {
+    // The real cursor is drawn above the overlay, so it stays sharp: show that.
+    const d = this.dpr, W = this.w / d, H = this.h / d;
+    const x = this.cardX(t, W) - 20, y = H * 0.5 - 30;
+    g.setTransform(d, 0, 0, d, 0, 0);
+    g.beginPath();
+    g.moveTo(x, y); g.lineTo(x, y + 16); g.lineTo(x + 4.2, y + 12.2); g.lineTo(x + 7, y + 18.4);
+    g.lineTo(x + 9.6, y + 17.2); g.lineTo(x + 6.9, y + 11.2); g.lineTo(x + 12, y + 11.2); g.closePath();
+    g.fillStyle = "#ffffff"; g.fill();
+    g.lineWidth = 1.2; g.strokeStyle = "#0b0d02"; g.stroke();
+  },
+  frame(ts) {
+    this.raf = 0;
+    if (!this.active() || !this.resize()) { this.last = 0; return; }
+    const dt = this.last ? Math.min(0.05, (ts - this.last) / 1000) : 1 / 60;
+    this.last = ts;
+    const still = this.reduce.matches;
+    if (!still) this.t += dt;
+    let cv = this.ring[this.head];
+    if (!cv) { cv = this.ring[this.head] = document.createElement("canvas"); cv.width = this.w; cv.height = this.h; }
+    this.scene(cv.getContext("2d"), this.t);
+    this.head = (this.head + 1) % this.max;
+    this.filled = Math.min(this.filled + 1, this.max);
+
+    const b = state.settings.blur;
+    const s = b.enabled ? b.strength : 0;
+    let ws = [1];
+    if (s > 0 && b.mode === "trail") {
+      ws = [];
+      const d = Math.exp(-dt / trailTau(s));
+      for (let k = 0, w = 1; k < this.max && w > 0.004; k++, w *= d) ws.push(w);
+    } else if (s > 0) {
+      ws = new Array(blendN(s)).fill(1);
+    }
+    ws = ws.slice(0, this.filled);
+    const out = $("#demoCanvas").getContext("2d");
+    out.setTransform(1, 0, 0, 1, 0, 0);
+    let cum = 0;
+    for (let k = ws.length - 1; k >= 0; k--) {
+      cum += ws[k];
+      out.globalAlpha = ws[k] / cum;
+      out.drawImage(this.ring[(this.head - 1 - k + this.max * 2) % this.max], 0, 0);
+    }
+    out.globalAlpha = 1;
+    this.cursor(out, this.t);
+    const cap = still ? "Animation paused to respect reduced motion"
+      : s <= 0 ? "Blur is off: this is the raw frame"
+      : b.mode === "trail" ? `Dragging a window with a ${Math.round(trailTau(s) * 1000)} ms trail`
+      : `Dragging a window, ${blendN(s)} frames averaged`;
+    const capEl = $("#demoCap");
+    if (capEl.textContent !== cap) capEl.textContent = cap;
+    this.kick();
+  },
+};
+document.addEventListener("visibilitychange", () => Demo.kick());
 
 // ------------------------------------------------------------------ mock host (browser only)
 const Mock = {

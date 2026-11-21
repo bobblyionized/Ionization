@@ -694,6 +694,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
 
     g_startHidden = HasArg(argc, argv, L"--tray");
     g_renderer.feedbackTest = HasArg(argc, argv, L"--no-exclude");
+    g_clock.noExclude = g_renderer.feedbackTest;
     g_dumpPath = ArgValue(argc, argv, L"--dump-frame");
     std::wstring exitAfter = ArgValue(argc, argv, L"--exit-after");
 

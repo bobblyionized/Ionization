@@ -44,7 +44,7 @@
     c.width = w; c.height = h;
     const g = c.getContext("2d");
     const sky = g.createLinearGradient(0, 0, 0, h);
-    sky.addColorStop(0, "#1d3a6b"); sky.addColorStop(0.45, "#e9895a"); sky.addColorStop(0.62, "#f3c27a");
+    sky.addColorStop(0, "#2a5f9e"); sky.addColorStop(0.3, "#7fa6d1"); sky.addColorStop(0.5, "#e9a072"); sky.addColorStop(0.62, "#f3c27a");
     g.fillStyle = sky; g.fillRect(0, 0, w, h);
     const sun = g.createRadialGradient(w * 0.7, h * 0.5, 2, w * 0.7, h * 0.5, h * 0.42);
     sun.addColorStop(0, "#fff6d8"); sun.addColorStop(0.18, "#ffd98a"); sun.addColorStop(1, "rgba(255,180,90,0)");
@@ -56,7 +56,11 @@
     };
     hill(h * 0.62, h * 0.05, "#5b3a5e", 0.4);
     hill(h * 0.72, h * 0.06, "#2c3f4a", 1.7);
-    hill(h * 0.84, h * 0.05, "#16261c", 3.1);
+    hill(h * 0.8, h * 0.05, "#2f5a2c", 3.1);
+    // Colour-checker strip: skin, sky, foliage, primaries, neutrals.
+    const patches = ["#c58c6e", "#8aa1c4", "#5c7a3a", "#e3a32b", "#7a4f9a", "#c9372c", "#3a8a3e", "#2f4fa8", "#f2f2ee", "#a7a7a5", "#5b5b5a", "#1b1b1b"];
+    const ph = Math.max(6, Math.round(h * 0.13)), pw = w / patches.length;
+    patches.forEach((c, i) => { g.fillStyle = c; g.fillRect(Math.floor(i * pw), h - ph, Math.ceil(pw), ph); });
     // UI card (like a window) to show how panels look.
     g.fillStyle = "rgba(13,14,17,0.92)";
     roundRect(g, w * 0.06, h * 0.1, w * 0.36, h * 0.34, 8); g.fill();

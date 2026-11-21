@@ -127,8 +127,12 @@ static std::wstring FriendlyNameFor(const std::wstring& device) {
         tgt.header.size = sizeof(tgt);
         tgt.header.adapterId = paths[i].targetInfo.adapterId;
         tgt.header.id = paths[i].targetInfo.id;
-        if (DisplayConfigGetDeviceInfo(&tgt.header) == ERROR_SUCCESS && tgt.monitorFriendlyDeviceName[0])
-            return tgt.monitorFriendlyDeviceName;
+        if (DisplayConfigGetDeviceInfo(&tgt.header) != ERROR_SUCCESS) continue;
+        auto tech = tgt.outputTechnology;
+        if (tech == DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INTERNAL || tech == DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EMBEDDED ||
+            tech == DISPLAYCONFIG_OUTPUT_TECHNOLOGY_UDI_EMBEDDED)
+            return L"Built-in display";
+        if (tgt.monitorFriendlyDeviceName[0]) return tgt.monitorFriendlyDeviceName;
     }
     return {};
 }

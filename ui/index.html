@@ -44,11 +44,11 @@
       <span class="brand-name">Ionization</span>
       <span class="badge" id="displayBadge">Display</span>
     </div>
-    <div class="command" title="Global hotkeys">
+    <button class="command" id="cmdBlur" title="Toggle motion blur">
       <svg width="14" height="14"><use href="#i-key"/></svg>
-      <span class="label">Toggle motion blur</span>
+      <span class="label" id="cmdLabel">Motion blur is on</span>
       <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>B</kbd>
-    </div>
+    </button>
     <div class="top-right">
       <span class="live"><i class="dot" id="liveDot"></i><b id="liveText">Idle</b><span id="liveSub">effects off</span></span>
       <span class="avatar">IO</span>
@@ -76,7 +76,7 @@
         <p class="eyebrow" style="margin:0">GPU frame time</p>
         <p class="big num" style="margin:4px 0 0"><span id="sideMs">0.0</span><small>ms</small></p>
         <div class="meter"><i id="sideMeter"></i></div>
-        <p class="eyebrow" style="margin:8px 0 0;letter-spacing:.02em;text-transform:none" id="sideBudget">of a 16.7 ms frame</p>
+        <p class="side-sub" id="sideBudget">of a 16.7 ms frame</p>
       </div>
       <div class="side-foot"><span class="ver" id="sideVer">v0.0.0</span><span class="tag dim" id="sideProfile">Clean</span></div>
     </nav>
@@ -102,13 +102,13 @@
         <div class="grid">
           <ul class="kpis" style="list-style:none;margin:0;padding:0">
             <li class="kpi"><p class="k" style="margin:0">Strength</p><p class="v num" style="margin:6px 0 0"><span id="kStrength">45</span><small>%</small></p>
-              <div class="meta"><span class="delta" id="kStrengthChip"><svg width="10" height="10"><use href="#i-pulse"/></svg><span>trail</span></span><span>blur amount</span></div></li>
+              <div class="meta"><span class="delta" id="kStrengthChip"><svg width="10" height="10"><use href="#i-pulse"/></svg><span>trail</span></span><span id="kPreset">custom</span></div></li>
             <li class="kpi"><p class="k" style="margin:0" id="kShutterLabel">Shutter</p><p class="v num" style="margin:6px 0 0"><span id="kShutter">120</span><small id="kShutterUnit">ms</small></p>
               <div class="meta"><span class="delta mute" id="kShutterChip">τ decay</span><span id="kShutterNote">trail length</span></div></li>
             <li class="kpi"><p class="k" style="margin:0">Display rate</p><p class="v num" style="margin:6px 0 0"><span id="kFps">0</span><small>fps</small></p>
               <div class="meta"><span class="delta mute" id="kFpsChip">capture 0</span><span id="kRes">-</span></div></li>
             <li class="kpi"><p class="k" style="margin:0">Added latency</p><p class="v num" style="margin:6px 0 0"><span id="kLat">0.0</span><small>ms</small></p>
-              <div class="meta"><span class="delta" id="kLatChip"><svg width="10" height="10"><use href="#i-down"/></svg><span>1 frame</span></span><span>input to photon</span></div></li>
+              <div class="meta"><span class="delta" id="kLatChip"><span>1 frame</span></span><span>input to screen</span></div></li>
           </ul>
 
           <div class="split">
@@ -122,8 +122,9 @@
               </div>
               <div class="hero-slider" id="heroSlider"></div>
               <div class="ticks"><span>0</span><span>25</span><span>50</span><span>75</span><span>100</span></div>
-              <div class="card-head" style="margin-top:22px;align-items:center">
-                <p class="hint" style="margin:0">Frame weights over the last <span id="chartSpan">300</span> ms</p>
+              <div class="demo" id="demo"><canvas id="demoCanvas"></canvas><span class="demo-cap" id="demoCap">Live preview</span></div>
+              <div class="card-head" style="margin-top:18px;align-items:center">
+                <p class="hint" style="margin:0">Frame weights, last <span id="chartSpan">300</span> ms</p>
                 <label class="switch"><input type="checkbox" id="compareToggle" checked><span class="track"><span class="knob"></span></span><span class="lbl" id="compareLbl">Compare frame blend</span></label>
               </div>
               <div class="chart" id="chart"></div>
@@ -161,7 +162,7 @@
           <div class="card"><p class="card-title" style="margin:0">Tone</p><div class="rows" id="colorRows"></div></div>
           <div class="stack">
             <div class="card"><div class="card-head"><p class="card-title" style="margin:0">Preview</p><span class="tag dim">approx.</span></div>
-              <div class="preview" style="margin-top:12px"><canvas id="colorPreview" width="320" height="200"></canvas><span class="cap" id="colorCap">neutral</span></div></div>
+              <div class="preview" style="margin-top:12px"><canvas id="colorPreview" width="320" height="200"></canvas><span class="cap">Before</span><span class="cap after" id="colorCap">After</span></div></div>
             <div class="card"><p class="card-title" style="margin:0">White balance</p><div class="rows" id="wbRows"></div></div>
           </div>
         </div>
@@ -181,7 +182,7 @@
             <ul class="list" style="margin-top:12px" id="lutList"></ul></div>
           <div class="stack">
             <div class="card"><div class="card-head"><p class="card-title" style="margin:0">Active look</p><span class="tag" id="lutActiveTag">NEUTRAL</span></div>
-              <div class="preview" style="margin-top:12px"><canvas id="lutPreview" width="320" height="200"></canvas><span class="cap" id="lutCap">before / after</span></div>
+              <div class="preview" style="margin-top:12px"><canvas id="lutPreview" width="320" height="200"></canvas><span class="cap">Before</span><span class="cap after" id="lutCap">After</span></div>
               <div class="rows" id="lutRows"></div></div>
             <div class="card"><p class="card-title" style="margin:0">About .cube</p><p class="note" style="margin:8px 0 0">Any 3D LUT in Adobe/Resolve <b>.cube</b> format works (sizes 2 to 129). LUTs are applied after tone and white balance, in display (sRGB) space.</p></div>
           </div>
@@ -204,7 +205,7 @@
           </div>
           <div class="stack">
             <div class="card"><div class="card-head"><p class="card-title" style="margin:0">Preview</p><span class="tag dim">approx.</span></div>
-              <div class="preview" style="margin-top:12px"><canvas id="fxPreview" width="320" height="200"></canvas></div></div>
+              <div class="preview" style="margin-top:12px"><canvas id="fxPreview" width="320" height="200"></canvas><span class="cap">Before</span><span class="cap after">After</span></div></div>
             <div class="card"><p class="card-title" style="margin:0">Film</p><div class="rows" id="filmRows"></div></div>
           </div>
         </div>
@@ -229,7 +230,7 @@
                 <div class="clockw" id="clockW"><div class="time"><span id="cwTime">00:00</span><span class="sec" id="cwSec">00</span></div><div class="date"><i class="dot on"></i><span id="cwDate">MON 01 JAN</span></div></div>
               </div>
             </div>
-            <div class="card"><p class="card-title" style="margin:0">Size</p><div class="rows" id="clockRows"></div></div>
+            <div class="card"><p class="card-title" style="margin:0">Appearance</p><div class="rows" id="clockRows"></div></div>
           </div>
           <div class="stack">
             <div class="card">

@@ -142,7 +142,7 @@ void ClockOverlay::Apply(const ClockSettings& s) {
         SetLayeredWindowAttributes(hwnd_, 0, 255, LWA_ALPHA);
         // On top: keep it out of the blur overlay's capture so it stays crisp.
         // On desktop: let it be captured, so it shows (blurred) through the overlay.
-        SetWindowDisplayAffinity(hwnd_, s_.layer == "desktop" ? WDA_NONE : WDA_EXCLUDEFROMCAPTURE);
+        SetWindowDisplayAffinity(hwnd_, (s_.layer == "desktop" || noExclude) ? WDA_NONE : WDA_EXCLUDEFROMCAPTURE);
         impl_->dcomp->CreateTargetForHwnd(hwnd_, TRUE, &impl_->target);
         impl_->dcomp->CreateVisual(&impl_->visual);
         impl_->target->SetRoot(impl_->visual.Get());
@@ -198,7 +198,7 @@ void ClockOverlay::Layout() {
     dpiScale_ = dx / 96.0f;
     float k = dpiScale_ * std::clamp(s_.size, 40.0f, 250.0f) / 100.0f;
     int w = (int)std::lround((s_.style == "mono" ? 380 : 340) * k);
-    int h = (int)std::lround((s_.date ? 150 : 118) * k);
+    int h = (int)std::lround((s_.date ? 138 : 110) * k);
     RECT wa = mi.rcWork;
     int m = (int)std::lround(28 * dpiScale_);
     int x = wa.right - w - m, y = wa.top + m;
@@ -273,7 +273,7 @@ void ClockOverlay::Render() {
     float pad = 22 * k;
     if (s_.backdrop) {
         D2D1_ROUNDED_RECT rr = D2D1::RoundedRect(D2D1::RectF(0.5f, 0.5f, w_ - 0.5f, h_ - 0.5f), 16 * k, 16 * k);
-        br->SetColor(Hex(0x0d0e11, 0.78f * op)); I.dc->FillRoundedRectangle(rr, br.Get());
+        br->SetColor(Hex(0x0d0e11, 0.88f * op)); I.dc->FillRoundedRectangle(rr, br.Get());
         br->SetColor(Hex(0xffffff, 0.06f * op));
         I.dc->DrawLine(D2D1::Point2F(16 * k, 1.5f), D2D1::Point2F(w_ - 16 * k, 1.5f), br.Get(), 1.0f);
         br->SetColor(Hex(0x2b2e35, op)); I.dc->DrawRoundedRectangle(rr, br.Get(), 1.0f);
