@@ -187,7 +187,7 @@ kbd {
 .icon-btn.on { color: var(--volt-ink); background: var(--volt); box-shadow: none; }
 @media (max-width: 1100px) { .msplit { grid-template-columns: 1fr; } }
 .dockstage { position: relative; height: 150px; margin-top: 12px; border-radius: 8px; overflow: hidden; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 14px;
-  background: radial-gradient(120% 120% at 20% 0%, #23324a 0%, transparent 55%), radial-gradient(90% 120% at 90% 10%, #3a2a55 0%, transparent 60%), linear-gradient(180deg, #14161c, #0a0b0d);
+  background: linear-gradient(170deg, #1b2130 0%, #12141a 55%, #0b0c0f 100%);
   box-shadow: inset 0 0 0 1px var(--line); }
 .dockbar { display: flex; align-items: flex-end; gap: 6px; padding: 8px 9px 10px; border-radius: 18px; background: #0b0c0fc7; box-shadow: inset 0 0 0 1px #2b2e35e6, inset 0 1px 0 #ffffff12; }
 .dk { position: relative; width: var(--s); height: var(--s); border-radius: 11px; background: var(--panel-2); box-shadow: inset 0 0 0 1px var(--line-2);
@@ -452,10 +452,7 @@ input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px va
 /* clock preview */
 .clockstage {
   position: relative; height: 220px; border-radius: 8px; overflow: hidden;
-  background:
-    radial-gradient(120% 90% at 85% 0%, #1b2a12 0%, transparent 55%),
-    radial-gradient(100% 120% at 0% 100%, #121821 0%, transparent 60%),
-    linear-gradient(160deg, #101216, #0a0b0d);
+  background: linear-gradient(160deg, #151922 0%, #0f1115 60%, #0a0b0d 100%);
   box-shadow: inset 0 0 0 1px var(--line);
 }
 .clockstage::after { content: ""; position: absolute; inset: 0; background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px); background-size: 32px 32px; pointer-events: none; }
