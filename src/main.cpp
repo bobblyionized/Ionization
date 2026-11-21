@@ -36,7 +36,7 @@ enum { TIMER_STATS = 1, TIMER_SAVE, TIMER_UPDATE, TIMER_ZORDER, TIMER_DUMP, TIME
        TIMER_GAME, TIMER_RAISECHECK, TIMER_UNLOAD, TIMER_MEM, TIMER_MACRO, TIMER_RECTEST };
 enum { HK_BLUR = 1, HK_VISUALS, HK_CLOCK, HK_MIC, HK_CARD, HK_PICK, HK_CLIP, HK_ICONS };
 const ULONG_PTR kCopyIsland = 0x49534C44;   // WM_COPYDATA tag for `Ionization.exe --island "text"`
-enum { IDM_SHOW = 100, IDM_BLUR, IDM_VISUALS, IDM_CLOCK, IDM_ADDGAME, IDM_QUIT, IDM_ICONS };
+enum { IDM_SHOW = 100, IDM_BLUR, IDM_VISUALS, IDM_CLOCK, IDM_ADDGAME, IDM_QUIT, IDM_ICONS, IDM_CLEARBAR };
 #define WM_APP_SHOW (WM_APP + 10)
 
 HWND g_hwnd = nullptr;
@@ -91,7 +91,7 @@ Json DefaultSettings() {
                 "size": 100, "opacity": 100, "layer": "top", "corner": "tr", "x": 0, "y": 0},
       "display": {"monitor": 0},
       "app": {"autoUpdate": true, "keepPanelSharp": false, "hotkeys": true, "trayHintShown": false},
-      "dock": {"enabled": false, "mode": "hover", "size": 48, "magnify": 60, "hideTaskbar": true, "showClock": true,
+      "dock": {"enabled": false, "mode": "hover", "style": "glass", "size": 48, "magnify": 60, "hideTaskbar": true, "showClock": true,
                "pins": [], "imported": false, "tbHidden": false, "tbOrig": 0},
       "island": {"enabled": false, "shape": "island", "theme": "black", "size": 100, "hidden": false, "volumeOsd": true},
       "clipboard": {"enabled": false, "max": 60},
@@ -387,6 +387,7 @@ DockSettings DockFrom(const Json& s) {
     d.magnify = (float)s.num("dock.magnify", 60);
     d.hideTaskbar = s.boolean("dock.hideTaskbar", true);
     d.showClock = s.boolean("dock.showClock", true);
+    d.style = s.str("dock.style", "glass");
     d.monitor = (int)s.num("display.monitor", 0);
     if (const Json* pins = s.path("dock.pins"); pins && pins->isArr())
         for (auto& p : pins->arr) d.pins.push_back({ Widen(p.str("launch", "")), Widen(p.str("key", "")), Widen(p.str("name", "")) });
@@ -575,6 +576,19 @@ void ApplySettings() {
     UpdateTrayTip();
 }
 
+// "Transparent taskbar": the Windows taskbar hides, and an icons-only dock pops up from the bottom edge.
+bool TransparentTaskbarOn() {
+    return g_settings.boolean("dock.enabled", false) && g_settings.str("dock.style", "glass") == "clear";
+}
+void SetTransparentTaskbar(bool on) {
+    Json& d = g_settings["dock"];
+    if (on) { d["enabled"] = true; d["style"] = "clear"; d["mode"] = "hover"; d["hideTaskbar"] = true; }
+    else d["enabled"] = false;
+    ApplySettings();
+    SaveSoon();
+    SendState();
+}
+
 void ToggleSetting(const char* section, const char* key) {
     Json& sec = g_settings[section];
     sec[key] = !g_settings.boolean((std::string(section) + "." + key).c_str(), false);
@@ -678,6 +692,7 @@ void ShowTrayMenu() {
     AppendMenuW(m, MF_STRING | (g_settings.boolean("visuals.enabled", true) ? MF_CHECKED : 0), IDM_VISUALS, L"Color && effects\tCtrl+Alt+V");
     AppendMenuW(m, MF_STRING | (g_settings.boolean("clock.enabled", false) ? MF_CHECKED : 0), IDM_CLOCK, L"Clock\tCtrl+Alt+C");
     AppendMenuW(m, MF_STRING | (g_settings.boolean("desktop.hideIcons", false) ? MF_CHECKED : 0), IDM_ICONS, L"Hide desktop icons\tCtrl+Alt+D");
+    AppendMenuW(m, MF_STRING | (TransparentTaskbarOn() ? MF_CHECKED : 0), IDM_CLEARBAR, L"Transparent taskbar");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     std::string last = g_game.LastForeignExe();
     if (!last.empty()) {
@@ -1193,6 +1208,7 @@ LRESULT CALLBACK PanelProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         case IDM_VISUALS: ToggleSetting("visuals", "enabled"); break;
         case IDM_CLOCK: ToggleSetting("clock", "enabled"); break;
         case IDM_ICONS: ToggleSetting("desktop", "hideIcons"); break;
+        case IDM_CLEARBAR: SetTransparentTaskbar(!TransparentTaskbarOn()); break;
         case IDM_ADDGAME: AddGameRule(g_game.LastForeignExe(), "pause"); break;
         case IDM_QUIT: Quit(); break;
         }

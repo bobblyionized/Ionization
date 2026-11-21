@@ -269,7 +269,7 @@ struct Dock::Impl {
         }
         float gap = 6 * k;
         total += gap * (items.size() - 1);
-        float mag = 1 + std::clamp(s.magnify, 0.0f, 100.0f) / 100.0f;
+        float mag = 1 + MagAmount();
         int w = (int)std::ceil(total + pad * 2 + S * (mag - 1) * 3.2f + 40 * k);
         int h = (int)std::ceil(bodyH + S * (mag - 1) + 44 * k);
         w = std::min(w, (int)(mon.right - mon.left));
@@ -306,9 +306,13 @@ struct Dock::Impl {
         }
     }
 
+    bool Clear() const { return s.style == "clear"; }
+    // Transparent style: no magnification, no labels, no body. Just the icons.
+    float MagAmount() const { return Clear() ? 0.0f : std::clamp(s.magnify, 0.0f, 100.0f) / 100.0f; }
+
     // Magnified positions for the current hover state.
     void Magnify() {
-        float mag = std::clamp(s.magnify, 0.0f, 100.0f) / 100.0f;
+        float mag = MagAmount();
         float total = 0, gap = 6 * k;
         for (auto& it : items) {
             float sc = 1;
@@ -411,13 +415,15 @@ struct Dock::Impl {
         float off = (1 - slide) * (bodyH + 16 * k);
         dc->SetTransform(D2D1::Matrix3x2F::Translation(0, off));
 
-        // glass body
-        D2D1_RECT_F body = BodyRect();
-        D2D1_ROUNDED_RECT rr = D2D1::RoundedRect(body, 20 * k, 20 * k);
-        br->SetColor(Hex(0x0b0c0f, 0.9f)); dc->FillRoundedRectangle(rr, br.Get());
-        br->SetColor(Hex(0x2b2e35, 0.9f)); dc->DrawRoundedRectangle(rr, br.Get(), 1.0f);
-        br->SetColor(Hex(0xffffff, 0.07f));
-        dc->DrawLine(D2D1::Point2F(body.left + 20 * k, body.top + 1.5f), D2D1::Point2F(body.right - 20 * k, body.top + 1.5f), br.Get(), 1.0f);
+        // glass body (the transparent style has none)
+        if (!Clear()) {
+            D2D1_RECT_F body = BodyRect();
+            D2D1_ROUNDED_RECT rr = D2D1::RoundedRect(body, 20 * k, 20 * k);
+            br->SetColor(Hex(0x0b0c0f, 0.9f)); dc->FillRoundedRectangle(rr, br.Get());
+            br->SetColor(Hex(0x2b2e35, 0.9f)); dc->DrawRoundedRectangle(rr, br.Get(), 1.0f);
+            br->SetColor(Hex(0xffffff, 0.07f));
+            dc->DrawLine(D2D1::Point2F(body.left + 20 * k, body.top + 1.5f), D2D1::Point2F(body.right - 20 * k, body.top + 1.5f), br.Get(), 1.0f);
+        }
 
         HWND fg = GetForegroundWindow();
         float baseY = winH - pad - 6 * k;   // icon bottom
@@ -426,6 +432,7 @@ struct Dock::Impl {
             float size = S * it.scale;
             D2D1_RECT_F ir = D2D1::RectF(it.x + (it.w - size) / 2, baseY - size, it.x + (it.w + size) / 2, baseY);
             if (it.type == ItSep) {
+                if (Clear()) continue;
                 br->SetColor(Hex(0x2b2e35));
                 dc->DrawLine(D2D1::Point2F(it.x + it.w / 2, baseY - S * 0.8f), D2D1::Point2F(it.x + it.w / 2, baseY - S * 0.1f), br.Get(), 1.0f);
             } else if (it.type == ItClock) {
@@ -436,9 +443,16 @@ struct Dock::Impl {
                 swprintf_s(t2, L"%s %d", days[st.wDayOfWeek], st.wDay);
                 auto f1 = Font(S * 0.36f, DWRITE_FONT_WEIGHT_MEDIUM);
                 auto f2 = Font(S * 0.22f, DWRITE_FONT_WEIGHT_REGULAR, true);
+                if (Clear()) {   // no backing: a soft shadow keeps the time readable on any wallpaper
+                    br->SetColor(Hex(0x000000, 0.55f));
+                    for (float d : { 1.0f, 2.0f }) {
+                        dc->DrawTextW(t1, (UINT32)wcslen(t1), f1.Get(), D2D1::RectF(it.x + d * k * 0.5f, baseY - S + d * k, it.x + it.w + d * k * 0.5f, baseY - S * 0.42f + d * k), br.Get());
+                        dc->DrawTextW(t2, (UINT32)wcslen(t2), f2.Get(), D2D1::RectF(it.x + d * k * 0.5f, baseY - S * 0.46f + d * k, it.x + it.w + d * k * 0.5f, baseY - S * 0.08f + d * k), br.Get());
+                    }
+                }
                 br->SetColor(Hex(0xf3f4f6));
                 dc->DrawTextW(t1, (UINT32)wcslen(t1), f1.Get(), D2D1::RectF(it.x, baseY - S, it.x + it.w, baseY - S * 0.42f), br.Get());
-                br->SetColor(Hex(0x8c919a));
+                br->SetColor(Clear() ? Hex(0xd6d8dc) : Hex(0x8c919a));
                 dc->DrawTextW(t2, (UINT32)wcslen(t2), f2.Get(), D2D1::RectF(it.x, baseY - S * 0.46f, it.x + it.w, baseY - S * 0.08f), br.Get());
             } else if (it.type == ItApp) {
                 App& a = apps[it.app];
@@ -464,7 +478,7 @@ struct Dock::Impl {
             }
         }
         // tooltip for the hovered item
-        if (hot >= 0 && hot < (int)items.size() && hover > 0.6f) {
+        if (!Clear() && hot >= 0 && hot < (int)items.size() && hover > 0.6f) {
             Item& it = items[hot];
             std::wstring label;
             switch (it.type) {
@@ -544,7 +558,7 @@ struct Dock::Impl {
         POINT c{ pt.x - wr.left, pt.y - wr.top };
         D2D1_RECT_F body = BodyRect();
         float off = (1 - slide) * (bodyH + 16 * k);
-        float topZone = winH - bodyH - S * (std::clamp(s.magnify, 0.0f, 100.0f) / 100.0f) * hover - 12 * k + off;
+        float topZone = winH - bodyH - S * MagAmount() * hover - 12 * k + off;
         bool over = c.x >= body.left - 12 * k && c.x <= body.right + 12 * k && c.y >= topZone && c.y <= winH + 4;
         SetClickThrough(!over);
         float newCursor = over ? (float)c.x : -1;

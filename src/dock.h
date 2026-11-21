@@ -13,6 +13,7 @@ struct DockPin {
 struct DockSettings {
     bool enabled = false;
     std::string mode = "hover";   // hover | always
+    std::string style = "glass";  // glass (dock body, magnify, labels) | clear (transparent: icons only)
     float size = 48;              // icon size (DIP)
     float magnify = 60;           // 0..100 -> up to 2x
     bool hideTaskbar = true;

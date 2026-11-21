@@ -26,7 +26,7 @@ const DEFAULTS = {
     weather: { on: false, x: -1, y: -1, place: "", lat: 0, lon: 0 },
     clocks: { on: false, x: -1, y: -1, zones: [{ name: "London", tz: "Europe/London" }, { name: "New York", tz: "America/New_York" }, { name: "Tokyo", tz: "Asia/Tokyo" }] },
     calendar: { on: false, x: -1, y: -1 }, todo: { on: false, x: -1, y: -1, items: [] }, stats: { on: false, x: -1, y: -1 } },
-  dock: { enabled: false, mode: "hover", size: 48, magnify: 60, hideTaskbar: true, showClock: true, pins: [], imported: false },
+  dock: { enabled: false, mode: "hover", style: "glass", size: 48, magnify: 60, hideTaskbar: true, showClock: true, pins: [], imported: false },
   profiles: [],
   activeProfile: "Clean",
 };
@@ -918,11 +918,16 @@ function renderDock() {
   const D = state.settings.dock;
   if (!$("#dockBar")) return;
   setSeg($("#dockModeSeg"), "v", D.mode);
+  setSeg($("#dockStyleSeg"), "v", D.style || "glass");
+  const clear = D.style === "clear";
+  $("#clearbarToggle").checked = !!D.enabled && clear;
+  $(".clearbar-card").classList.toggle("on", !!D.enabled && clear);
   $("#dockModeTag").textContent = D.mode === "always" ? "ALWAYS SHOWN" : "SHOWS ON HOVER";
   $("[data-pip=dock]").classList.toggle("on", !!D.enabled);
   const sz = Math.round(clamp(D.size, 32, 80) * 0.8);
   const bar = $("#dockBar");
   bar.style.setProperty("--s", sz + "px");
+  bar.classList.toggle("clear", clear);
   const pins = D.pins || [];
   const tile = (label, cls, run) => `<div class="dk ${cls}" title="${escapeHtml(label)}">${escapeHtml(label.slice(0, 1).toUpperCase())}${run ? `<i class="run${run === 2 ? " on" : ""}"></i>` : ""}</div>`;
   const now = new Date();
@@ -934,7 +939,7 @@ function renderDock() {
     `<div class="dk" title="Quick settings">${svgUse("i-display", 16)}</div>`;
   // magnify the preview on hover, like the real dock
   const tiles = $$(".dk", bar);
-  bar.onmousemove = (e) => tiles.forEach((t) => {
+  bar.onmousemove = (e) => !clear && tiles.forEach((t) => {
     const r = t.getBoundingClientRect(), d = (e.clientX - (r.left + r.width / 2)) / (sz * 1.6);
     const sc = 1 + (D.magnify / 100) * Math.exp(-d * d);
     t.style.width = t.style.height = sz * sc + "px";
@@ -1144,6 +1149,13 @@ function build() {
   });
   $("#todoClearDone").addEventListener("click", () => { const W = state.settings.widgets; W.todo.items = (W.todo.items || []).filter((t) => !t.done); pushSettings(); renderWidgets(); });
   $$("#dockModeSeg button").forEach((b) => b.addEventListener("click", () => set("dock.mode", b.dataset.v)));
+  $$("#dockStyleSeg button").forEach((b) => b.addEventListener("click", () => set("dock.style", b.dataset.v)));
+  $("#clearbarToggle").addEventListener("change", (e) => {
+    const D = state.settings.dock;
+    if (e.target.checked) { D.enabled = true; D.style = "clear"; D.mode = "hover"; D.hideTaskbar = true; }
+    else D.enabled = false;
+    pushSettings(); renderDock(); syncBinds();
+  });
   $$("#islandShapeSeg button").forEach((b) => b.addEventListener("click", () => set("island.shape", b.dataset.v)));
   $$("#islandThemeSeg button").forEach((b) => b.addEventListener("click", () => set("island.theme", b.dataset.v)));
   $$("#islandDemoSeg button").forEach((b) => b.addEventListener("click", () => { islandDemo = b.dataset.v; renderIsland(); }));

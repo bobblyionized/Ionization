@@ -444,8 +444,16 @@
           <label class="switch"><input type="checkbox" data-bind="dock.enabled"><span class="track"><span class="knob"></span></span><span class="lbl">Use the dock</span></label>
         </div>
         <div class="grid">
+          <div class="card clearbar-card">
+            <div class="opt-row" style="padding:0">
+              <div><div class="t" style="font-size:14px;color:var(--fg)">Transparent taskbar</div>
+                <div class="s">The taskbar hides until you hover the bottom edge, then pops up with just your icons: no background, no hover effects</div></div>
+              <label class="switch"><input type="checkbox" id="clearbarToggle"><span class="track"><span class="knob"></span></span></label></div>
+          </div>
           <div class="card">
-            <div class="card-head"><p class="card-title" style="margin:0">Preview</p><span class="tag dim" id="dockModeTag">SHOWS ON HOVER</span></div>
+            <div class="card-head" style="align-items:center"><p class="card-title" style="margin:0">Preview</p>
+              <div style="display:flex;gap:10px;align-items:center"><div class="seg sm" id="dockStyleSeg"><button data-v="glass">Glass dock</button><button data-v="clear">Transparent</button><i class="ind"></i></div>
+              <span class="tag dim" id="dockModeTag">SHOWS ON HOVER</span></div></div>
             <div class="dockstage" id="dockStage"><div class="dockbar" id="dockBar"></div></div>
           </div>
           <div class="split">

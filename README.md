@@ -31,6 +31,7 @@ A visual changer for Windows 11, built around screen-wide, CapCut-style motion b
   - It only draws while the desktop is visible. Games, maximized or fullscreen windows, the lock screen and battery saver pause it.
   - Animated looks render at half resolution.
 - **Dock**: a floating, magnifying dock that replaces the Windows taskbar and gives it back when turned off.
+- **Transparent taskbar** (one switch on the Dock page, or the tray menu): the taskbar hides until you hover the bottom edge, then pops up with just your icons. It has no background and no hover effects.
 - **Memory** and **Macros**: background RAM trimming, plus a keyboard and mouse macro recorder and player.
 - **Profiles**: Clean, Cinematic, Dreamy, Retro, Night, and your own saved looks.
 - **Hide desktop icons** for a clean wallpaper (`Ctrl+Alt+D` or the tray menu). It uses Windows' own "Show desktop icons" switch, and the icons come back when you quit.
