@@ -1049,6 +1049,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
         LogLine("memtest: after restore %zu tracked", mo.LoweredCount());
         return 0;
     }
+    if (HasArg(argc, argv, L"--macro-selftest")) {
+        LogLine("macro selftest: %s", g_macros.SelfTestConvert().dump().c_str());
+        return 0;
+    }
     Updater::CleanupOldExe();
     EnableDarkMenus();
     LoadSettings();

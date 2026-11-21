@@ -24,6 +24,10 @@
     <symbol id="i-game" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5h6a3.6 3.6 0 0 1 3.5 4.4l-.6 2.4a1.6 1.6 0 0 1-2.8.6L10 11H6l-1.1 1.4a1.6 1.6 0 0 1-2.8-.6l-.6-2.4A3.6 3.6 0 0 1 5 5Z"/><path d="M5.2 7.4v2M4.2 8.4h2"/><circle cx="10.8" cy="8" r=".4" fill="currentColor"/></symbol>
     <symbol id="i-memory" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2.4" y="4.2" width="11.2" height="7.6" rx="1.4"/><path d="M5 4.2V2.6M8 4.2V2.6M11 4.2V2.6M5 13.4v-1.6M8 13.4v-1.6M11 13.4v-1.6"/><rect x="5.2" y="6.6" width="5.6" height="2.8" rx=".6" opacity=".7"/></symbol>
     <symbol id="i-bolt" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M9 1.8 3.6 9h4l-1 5.2L12.4 7h-4L9 1.8Z"/></symbol>
+    <symbol id="i-macro" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1.8" y="3.6" width="12.4" height="8.8" rx="1.8"/><path d="M4.4 6.4h1.2M7.4 6.4h1.2M10.4 6.4h1.2M4.6 9.6h4.6"/><path d="m11.2 8.6 1.4 1-1.4 1" /></symbol>
+    <symbol id="i-play" viewBox="0 0 16 16" fill="currentColor"><path d="M5 3.4v9.2a.6.6 0 0 0 .9.5l7.3-4.6a.6.6 0 0 0 0-1L5.9 2.9a.6.6 0 0 0-.9.5Z"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 16 16" fill="currentColor"><rect x="4" y="4" width="8" height="8" rx="1.6"/></symbol>
+    <symbol id="i-rec" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="4.6"/></symbol>
     <symbol id="i-about" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="6.1"/><path d="M8 7.2v3.9"/><circle cx="8" cy="4.9" r=".5" fill="currentColor"/></symbol>
     <symbol id="i-min" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M4 8.5h8"/></symbol>
     <symbol id="i-close" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="m4.5 4.5 7 7M11.5 4.5l-7 7"/></symbol>
@@ -76,6 +80,7 @@
         <li class="group">System</li>
         <li><button data-view="perf"><svg class="ico" width="16" height="16"><use href="#i-perf"/></svg>Performance<i class="pip" data-pip="game"></i></button></li>
         <li><button data-view="memory"><svg class="ico" width="16" height="16"><use href="#i-memory"/></svg>Memory<i class="pip" data-pip="memory"></i></button></li>
+        <li><button data-view="macros"><svg class="ico" width="16" height="16"><use href="#i-macro"/></svg>Macros<i class="pip" data-pip="macro"></i></button></li>
         <li class="group">App</li>
         <li><button data-view="profiles"><svg class="ico" width="16" height="16"><use href="#i-profiles"/></svg>Profiles</button></li>
         <li><button data-view="display"><svg class="ico" width="16" height="16"><use href="#i-display"/></svg>Display</button></li>
@@ -360,6 +365,72 @@
         </div>
       </section>
 
+      <!-- ============================== MACROS -->
+      <section class="view" data-view="macros">
+        <div class="viewhead">
+          <div><p class="title" style="margin:0">Macros</p><p class="subtitle" style="margin:2px 0 0">Record keyboard and mouse once, replay it on any key or mouse button</p></div>
+          <div style="display:flex;gap:8px">
+            <button class="btn ghost sm" data-template="clicker">Auto-clicker</button>
+            <button class="btn ghost sm" data-template="spammer">Key spammer</button>
+            <button class="btn primary sm" data-template="blank" style="height:32px"><svg width="14" height="14"><use href="#i-plus"/></svg>New macro</button>
+          </div>
+        </div>
+        <div class="msplit">
+          <div class="stack">
+            <div class="card">
+              <div class="card-head" style="align-items:center"><p class="card-title" style="margin:0">Your macros</p><span class="tag dim" id="macroCount">0</span></div>
+              <ul class="list" style="margin-top:12px" id="macroList"></ul>
+              <p class="note" id="macroEmpty" style="margin:14px 0 0">No macros yet. Start from a template above, or make a new one and press Record.</p>
+            </div>
+            <div class="card"><p class="card-title" style="margin:0">Safety</p>
+              <ul class="lim">
+                <li><b>Ctrl+Alt+Esc</b> stops every macro instantly, even mid-loop.</li>
+                <li>Keys and buttons a macro was holding are always released when it stops.</li>
+                <li>Some online games ban input macros. Windows also blocks macros from typing into apps running as administrator.</li>
+              </ul></div>
+          </div>
+          <div class="card" id="macroEditor">
+            <div class="ed-head">
+              <input class="field ed-name" id="mName" maxlength="40" placeholder="Macro name" spellcheck="false">
+              <label class="switch"><input type="checkbox" id="mEnabled"><span class="track"><span class="knob"></span></span><span class="lbl">Enabled</span></label>
+              <button class="btn sm" id="mPlay"><svg width="12" height="12"><use href="#i-play"/></svg><span>Play</span></button>
+              <button class="del" id="mDelete" title="Delete macro"><svg width="14" height="14"><use href="#i-trash"/></svg></button>
+            </div>
+            <div class="ed-grid">
+              <div class="opt-row"><div><div class="t">Trigger</div><div class="s">Click, then press a key combo or the middle or side mouse button</div></div>
+                <button class="capture" id="mTrigger" type="button">Set trigger</button></div>
+              <div class="opt-row"><div><div class="t">When triggered</div><div class="s" id="mModeHint">Runs once per press</div></div>
+                <div class="seg sm" id="mMode"><button data-v="press">Press</button><button data-v="toggle">Toggle</button><button data-v="hold">Hold</button><i class="ind"></i></div></div>
+              <div class="opt-row"><div><div class="t">Repeat</div><div class="s">How many times one run plays</div></div>
+                <div style="display:flex;gap:8px;align-items:center">
+                  <label class="numbox" id="mCountBox"><input id="mCount" inputmode="numeric" spellcheck="false"><span class="unit">x</span></label>
+                  <div class="seg sm" id="mRepeat"><button data-v="once">Once</button><button data-v="times">Times</button><button data-v="forever">Forever</button><i class="ind"></i></div></div></div>
+              <div class="opt-row"><div><div class="t">Block the trigger</div><div class="s">The trigger key doesn't also reach your app</div></div>
+                <label class="switch"><input type="checkbox" id="mBlock"><span class="track"><span class="knob"></span></span></label></div>
+              <div class="opt-row"><div><div class="t">Only in</div><div class="s">Leave empty to work everywhere</div></div>
+                <div style="display:flex;gap:8px"><input class="field" id="mScope" placeholder="any app" style="width:170px" spellcheck="false"><button class="btn ghost sm" id="mScopeLast" type="button" style="height:32px"></button></div></div>
+            </div>
+            <div class="rows" id="macroRows"></div>
+
+            <div class="rec-bar">
+              <button class="btn rec" id="mRecord"><svg width="12" height="12"><use href="#i-rec"/></svg><span>Record</span></button>
+              <label class="switch"><input type="checkbox" id="mRecMouse" checked><span class="track"><span class="knob"></span></span><span class="lbl">Record mouse movement</span></label>
+              <span class="rec-status" id="mRecStatus"></span>
+            </div>
+
+            <div class="card-head" style="margin-top:18px;align-items:center"><p class="card-title" style="margin:0">Steps</p><span class="tag dim" id="mStepCount">0 STEPS</span></div>
+            <div class="add-steps">
+              <button class="btn ghost sm" data-add="key">+ Key</button>
+              <button class="btn ghost sm" data-add="click">+ Click</button>
+              <button class="btn ghost sm" data-add="text">+ Type text</button>
+              <button class="btn ghost sm" data-add="wait">+ Wait</button>
+              <button class="btn ghost sm" data-add="scroll">+ Scroll</button>
+            </div>
+            <ul class="steps" id="mSteps"></ul>
+          </div>
+        </div>
+      </section>
+
       <!-- ============================== PROFILES -->
       <section class="view" data-view="profiles">
         <div class="viewhead">
@@ -428,5 +499,6 @@
 </div>
 <script src="looks.js"></script>
 <script src="app.js"></script>
+<script src="macros.js"></script>
 </body>
 </html>

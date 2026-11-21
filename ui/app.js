@@ -78,6 +78,7 @@ function onHost(msg) {
       if (msg.game) state.game = msg.game;
       if ("focused" in msg) state.focused = !!msg.focused;
       renderAll();
+      if (window.Macros) Macros.init(msg);
       if (msg.view) showView(msg.view);
       reportPainted();
       if (state.update && state.update.status === "updated") toast(`Updated to v${state.update.latest}`, "ok");
@@ -97,6 +98,7 @@ function onHost(msg) {
     case "hotkeys": state.hotkeys = msg.value || state.hotkeys; renderShortcuts(); break;
     case "game": state.game = msg.value || state.game; renderPerf(); renderHeader(); renderStats(); break;
     case "focus": state.focused = !!msg.value; if (state.focused) Demo.kick(); break;
+    case "macroStatus": case "macroRecorded": if (window.Macros) Macros.onMessage(msg); break;
     case "mem": state.mem = msg.value; renderMemory(); break;
     case "memTrimmed": state.lastTrim = { freed: msg.freed, trimmed: msg.trimmed, why: msg.why, at: Date.now() }; renderMemory();
       if (msg.why !== "auto") toast(`Freed ${fmtBytes(msg.freed)} from ${msg.trimmed} processes`, "ok"); break;
@@ -1056,6 +1058,13 @@ const Mock = {
       onHost({ type: "mem", value: { total, available: avail, commit: 9.4 * GB, commitLimit: 12.6 * GB, load: Math.round((1 - avail / total) * 100),
         top: [["claude.exe", 1.2, 9], ["robloxplayerbeta.exe", 0.95, 1], ["msedgewebview2.exe", 0.35, 12], ["discord.exe", 0.31, 6], ["explorer.exe", 0.18, 1], ["searchhost.exe", 0.12, 1]]
           .map(([exe, g, n]) => ({ exe, ws: g * GB, n })) } });
+    } else if (m.type === "macroRecord") {
+      if (m.start) onHost({ type: "macroStatus", value: { recording: true, events: 42, playing: [] } });
+      else { onHost({ type: "macroStatus", value: { recording: false, events: 0, playing: [] } });
+        onHost({ type: "macroRecorded", steps: [{ k: "mv", x: 0.3, y: 0.4, w: 0 }, { k: "mv", x: 0.32, y: 0.41, w: 8 }, { k: "md", b: 0, w: 120 }, { k: "mu", b: 0, w: 60 }, { k: "kd", vk: 72, sc: 35, w: 200 }, { k: "ku", vk: 72, sc: 35, w: 40 }] }); }
+    } else if (m.type === "macroPlay") {
+      onHost({ type: "macroStatus", value: { recording: false, events: 0, playing: [m.id] } });
+      setTimeout(() => onHost({ type: "macroStatus", value: { recording: false, events: 0, playing: [] } }), 1500);
     } else if (m.type === "checkUpdate") {
       onHost({ type: "update", value: { status: "dev" } });
     } else if (m.type === "clockEdit") {

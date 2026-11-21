@@ -21,11 +21,14 @@ bool IsModifier(int vk) {
         vk == VK_RCONTROL || vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU || vk == VK_LWIN || vk == VK_RWIN;
 }
 
+// Never call WindowFromPoint here: it can send WM_NCHITTEST to our own (blocked) UI thread
+// while the hook thread is being stopped, which deadlocks. A rectangle test sends nothing.
+std::atomic<HWND> g_panel{ nullptr };
 bool OverOurWindow(POINT pt) {
-    HWND h = WindowFromPoint(pt);
-    DWORD pid = 0;
-    if (h) GetWindowThreadProcessId(h, &pid);
-    return pid == GetCurrentProcessId();
+    HWND panel = g_panel.load();
+    if (!panel || !IsWindowVisible(panel) || IsIconic(panel)) return false;
+    RECT r;
+    return GetWindowRect(panel, &r) && PtInRect(&r, pt);
 }
 
 // Sleep with sub-millisecond precision, waking early if the run was cancelled.
@@ -114,6 +117,7 @@ MacroEngine::~MacroEngine() {
 void MacroEngine::Init(HWND notify) {
     notify_ = notify;
     g_engine = this;
+    g_panel = notify;
     // The emergency stop is always available.
     RegisterHotKey(notify_, kStopHotkey, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_ESCAPE);
 }
@@ -323,6 +327,26 @@ Json MacroEngine::StopRecording() {
         recCount_ = 0;
     }
     UpdateHooks();
+    return Convert(ev);
+}
+
+Json MacroEngine::SelfTestConvert() {
+    // Synthetic events in the hook's own format: a dragged path, a click, A, scroll, Ctrl left over.
+    std::vector<RawEvent> ev;
+    LONGLONG t = Now(), f = (LONGLONG)Freq();
+    auto ms = [&](double v) { return t + (LONGLONG)(v * f / 1000.0); };
+    for (int i = 0; i <= 40; ++i) ev.push_back({ 1, 0, 0, 0, 0, false, false, false, { 300 + i * 5, 400 }, ms(i * 2.0) });   // 2 ms apart
+    ev.push_back({ 2, 0, 0, 0, 0, false, true, false, { 500, 400 }, ms(100) });
+    ev.push_back({ 2, 0, 0, 0, 0, false, false, false, { 500, 400 }, ms(140) });
+    ev.push_back({ 0, 0x41, 0x1E, 0, 0, false, true, false, {}, ms(200) });
+    ev.push_back({ 0, 0x41, 0x1E, 0, 0, false, false, false, {}, ms(260) });
+    ev.push_back({ 3, 0, 0, 0, -120, false, false, false, { 500, 400 }, ms(320) });
+    ev.push_back({ 0, VK_LCONTROL, 0x1D, 0, 0, false, true, false, {}, ms(400) });   // trailing modifier: dropped
+    recMouse_ = true; recRelative_ = false;
+    return Convert(ev);
+}
+
+Json MacroEngine::Convert(std::vector<RawEvent> ev) {
     // Drop trailing modifier presses (from a stop shortcut) and anything after the last real event.
     while (!ev.empty() && ev.back().type == 0 && IsModifier(ev.back().vk)) ev.pop_back();
 

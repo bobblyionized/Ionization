@@ -43,6 +43,7 @@ public:
     const Json& MacrosJson() const { return json_; }
     bool StartRecording(bool mouseMoves, bool relative);
     Json StopRecording();
+    Json SelfTestConvert();   // conversion check with synthetic events (no real input)
     int RecordedCount() const { return (int)recCount_.load(); }
     bool Recording() const { return recording_; }
     void Play(int index, bool loopUntilStopped = false);
@@ -78,6 +79,7 @@ private:
 
     // recording
     struct RawEvent { int type; int vk, sc, button, delta; bool ext, down, horizontal; POINT pt; LONGLONG t; };
+    Json Convert(std::vector<RawEvent> ev);
     std::atomic<bool> recording_{ false };
     bool recMouse_ = true, recRelative_ = false;
     std::vector<RawEvent> rec_;
